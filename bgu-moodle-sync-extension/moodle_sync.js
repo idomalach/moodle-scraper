@@ -1917,23 +1917,14 @@
             // sit as siblings: <section>/תרגילים, /הגשות, /פתרונות מרצה.
             const sm = state.sectionMap[item.courseId] || {};
             const baseFolder = (sm[item.section] && sm[item.section].folder) || item.section;
-            const isExam = isExamRelated(item.section) || isExamRelated(item.name);
             for (const file of files) {
-              let diskFolder;
-              if (file.isSubmission) {
-                // The student's own uploaded submission → הגשות.
-                diskFolder = `${baseFolder}/הגשות`;
-              } else if (isExam) {
-                // For exams: each exam gets its own identity subfolder (year+semester+moed)
-                const identity = extractExamIdentity(file.name) || extractExamIdentity(item.name) || extractExamIdentity(item.section);
-                diskFolder = identity ? `${baseFolder}/${identity}` : baseFolder;
-              } else if (isSolutionFile(file.name)) {
-                // Lecturer solution attached to the assignment → פתרונות מרצה.
-                diskFolder = `${baseFolder}/פתרונות מרצה`;
-              } else {
-                // The assignment brief / question → תרגילים.
-                diskFolder = `${baseFolder}/תרגילים`;
-              }
+              // Only take the student's OWN submission from an assignment page.
+              // The professor's brief/solution attached here (component
+              // mod_assign / assignfeedback) is also published on the main
+              // course page, so pulling it from both would duplicate it.
+              // Submissions are uniquely the "assignsubmission_file" component
+              // (file.isSubmission).
+              if (!file.isSubmission) continue;
               downloadQueue.push({
                 ...item,
                 name: file.name,
@@ -1942,7 +1933,7 @@
                 fetchUrl: file.url,
                 isChild: true,
                 parentCmid: item.cmid,
-                diskFolder,
+                diskFolder: `${baseFolder}/הגשות`,
               });
             }
           }
