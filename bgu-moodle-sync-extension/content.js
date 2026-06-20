@@ -221,24 +221,33 @@
           const idStr = card.getAttribute('data-course-id');
           const id = parseInt(idStr, 10);
           if (!id || id < 2 || seen.has(id)) return;
-          seen.add(id);
 
-          // Get course name from the card's title link
+          // The course-view link — used for both the name fallback and the URL.
+          const link = card.querySelector('a[href*="course/view.php"]');
+
+          // Get the course name. Card layouts expose it via .multiline /
+          // .coursename a / a[title]; LIST layouts (e.g. Ariel's "academi"
+          // theme) carry the name only as the course-view link's text /
+          // aria-label / title, so fall back to that.
           const nameEl = card.querySelector('.multiline') ||
                          card.querySelector('.coursename a') ||
                          card.querySelector('a[title]');
           let name = '';
           if (nameEl) {
-            name = nameEl.getAttribute('title') || nameEl.textContent.trim();
+            name = nameEl.getAttribute('title') || nameEl.textContent || '';
+          }
+          if (!name && link) {
+            name = link.getAttribute('aria-label') || link.getAttribute('title') || link.textContent || '';
           }
           // Clean up whitespace artifacts
           name = name.replace(/\s+/g, ' ').trim();
+          // Don't mark this id as seen until we actually have a name — in list
+          // layouts the first element carrying data-course-id (e.g. the <li> row
+          // or an action menu item) may have no name, while a later one does.
           if (!name) return;
 
-          // Also grab the course URL if available
-          const link = card.querySelector('a[href*="course/view.php"]');
+          seen.add(id);
           const viewUrl = link ? link.href : '';
-
           courses.push({ id, moodleName: name, folderName: deriveFolderName(name), viewUrl });
         });
 
@@ -289,13 +298,19 @@
       const apiCourses = data[0].data.courses;
       const now = Date.now() / 1000;
 
-      // Filter to courses that started within the last ~8 months (current academic year)
-      // This avoids pulling in old "inprogress" courses from previous years
-      const eightMonthsAgo = now - (8 * 30 * 24 * 3600);
-      const recent = apiCourses.filter(c => c.startdate > eightMonthsAgo);
-
-      // If filtering reduced to zero, fall back to all inprogress
-      const source = recent.length > 0 ? recent : apiCourses;
+      // Most Moodle sites classify only genuinely-current courses as "inprogress",
+      // so trust the list as-is. Some sites (e.g. BGU) mark EVERY enrolled course
+      // "inprogress" (no end dates set), which would pull in years of old courses.
+      // Detect that case by an implausibly large count and narrow to courses
+      // started within the last ~13 months (a full academic year). We deliberately
+      // avoid a tighter window: some universities set startdate to the academic-
+      // YEAR start (e.g. Ariel uses Sept 1), which an 8-month filter wrongly drops.
+      let source = apiCourses;
+      if (apiCourses.length > 25) {
+        const cutoff = now - (13 * 30 * 24 * 3600);
+        const recent = apiCourses.filter(c => c.startdate > cutoff);
+        if (recent.length > 0) source = recent;
+      }
 
       const courses = source.map(c => ({
         id: c.id,
@@ -319,12 +334,14 @@
    */
   /**
    * Fetch ALL enrolled courses via the timeline classification API with
-   * classification='all', then combine with active courses (active first,
-   * rest after) and store in chrome.storage.local.
+   * classification='allincludinghidden', then combine with active courses
+   * (active first, rest after) and store in chrome.storage.local.
    *
    * On BGU (and many Israeli Moodle instances), the 'hidden'/'past'
    * classifications return 0 results — all courses sit under 'inprogress'.
-   * Using 'all' reliably returns every enrolled course across all semesters.
+   * We use 'allincludinghidden' rather than 'all' because on some sites
+   * (e.g. Ariel) 'all' EXCLUDES courses the student has hidden from their
+   * dashboard, so those would never appear in the inactive-courses picker.
    * core_enrol_get_users_courses is disabled on many instances, so we
    * don't attempt it.
    */
@@ -343,7 +360,7 @@
         body: JSON.stringify([{
           index: 0,
           methodname: 'core_course_get_enrolled_courses_by_timeline_classification',
-          args: { offset: 0, limit: 0, classification: 'all', sort: 'fullname' }
+          args: { offset: 0, limit: 0, classification: 'allincludinghidden', sort: 'fullname' }
         }])
       });
 
