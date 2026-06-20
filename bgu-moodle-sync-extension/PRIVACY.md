@@ -48,4 +48,4 @@ extension.
 
 ## Contact
 
-For questions about this policy, contact the developer at idomalach98@gmail.com.
+For questions about this policy, contact us at MoodleScraper@theangelcy.co.il.

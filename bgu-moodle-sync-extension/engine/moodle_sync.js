@@ -1454,7 +1454,7 @@
       const skippedItems = courseSkipped || [];
       const hasHeaders = skippedItems.length > 0;
       if (hasHeaders) {
-        aoa.push(['קורס', 'מיקום במוודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
+        aoa.push(['קורס', 'מיקום במודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
         for (const item of skippedItems) {
           aoa.push([
             courseName,
@@ -1474,7 +1474,7 @@
       ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
       ws['!cols'] = [
         { wch: 18 }, // קורס
-        { wch: 22 }, // מיקום במוודל
+        { wch: 22 }, // מיקום במודל
         { wch: 35 }, // שם
         { wch: 50 }, // קישור
         { wch: 30 }, // סיבה
@@ -1532,7 +1532,7 @@
         for (const item of courseSkipped) {
           allSkipped.push({
             'קורס': course.folderName,
-            'מיקום במוודל': item.section || '',
+            'מיקום במודל': item.section || '',
             'שם': item.name || '',
             'קישור': item.url || '',
             'סיבה': item.reason || '',
@@ -1545,9 +1545,9 @@
       aoa.push([`עדכון אחרון: ${dateStr} ${timeStr}`]);
       const hasHeaders = allSkipped.length > 0;
       if (hasHeaders) {
-        aoa.push(['קורס', 'מיקום במוודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
+        aoa.push(['קורס', 'מיקום במודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
         for (const r of allSkipped) {
-          aoa.push([r['קורס'], r['מיקום במוודל'], r['שם'], r['קישור'], r['סיבה'], r['תאריך']]);
+          aoa.push([r['קורס'], r['מיקום במודל'], r['שם'], r['קישור'], r['סיבה'], r['תאריך']]);
         }
       } else {
         aoa.push(['כל הקבצים הורדו בהצלחה בכל הקורסים.']);
@@ -1557,7 +1557,7 @@
       ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
       ws['!cols'] = [
         { wch: 18 }, // קורס
-        { wch: 22 }, // מיקום במוודל
+        { wch: 22 }, // מיקום במודל
         { wch: 35 }, // שם
         { wch: 50 }, // קישור
         { wch: 30 }, // סיבה

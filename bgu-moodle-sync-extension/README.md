@@ -86,11 +86,11 @@ The extension has three layers:
 bgu-moodle-sync-extension/
 ├── manifest.json        — Extension config (Manifest V3)
 ├── content.js           — Injection orchestrator + dashboard auto-detection
-├── moodle_sync.js       — Sync engine copy (used by content script)
+├── background.js        — Service worker (cross-origin fetch for portal/syllabus content)
 ├── popup.html/js/css    — Toolbar popup UI
 ├── options.html/js/css  — Full settings page (v3 redesign)
 ├── engine/
-│   ├── moodle_sync.js   — Bundled sync engine copy
+│   ├── moodle_sync.js   — The sync engine (loaded by content.js)
 │   └── lib/
 │       ├── xlsx.full.min.js  — SheetJS (bundled)
 │       └── jszip.min.js      — JSZip (bundled)

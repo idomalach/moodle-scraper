@@ -33,8 +33,8 @@
         if (!sameSet) {
           $('#detectedBanner').style.display = '';
           const label = newCourses.length === detected.length
-            ? `זוהו ${detected.length} קורסים`
-            : (newCourses.length === 1 ? 'זוהה קורס חדש אחד' : `זוהו ${newCourses.length} קורסים חדשים`);
+            ? `זוהו ${detected.length} קורסים נוספים`
+            : (newCourses.length === 1 ? 'זוהה קורס נוסף אחד' : `זוהו ${newCourses.length} קורסים נוספים`);
           $('#detectedText').textContent = label;
         } else {
           $('#detectedBanner').style.display = 'none';
@@ -88,7 +88,7 @@
     const tab = tabs[0];
 
     if (!tab.url || !isMoodleUrl(tab.url, config)) {
-      setStatus('inactive', 'לא דף מוודל');
+      setStatus('inactive', 'יש להיכנס למודל על מנת להשתמש בתוסף');
       $('#syncButtons').style.display = 'none';
       return;
     }
@@ -117,9 +117,9 @@
       }
     } catch (e) {
       if (tab.url && isMoodleUrl(tab.url, config)) {
-        setStatus('inactive', 'רעננו את דף המוודל להפעלה');
+        setStatus('inactive', 'רעננו את דף המודל להפעלה');
       } else {
-        setStatus('inactive', 'לא דף מוודל');
+        setStatus('inactive', 'יש להיכנס למודל על מנת להשתמש בתוסף');
       }
       $('#syncButtons').style.display = 'none';
     }

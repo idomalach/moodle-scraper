@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>מדיניות פרטיות - Moodle Scraper</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .doc { max-width: 760px; margin: 0 auto; padding: 40px 22px 70px; }
+    .doc-back { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 26px; }
+    .doc h1 { font-size: 34px; font-weight: 900; margin-bottom: 6px; }
+    .doc .updated { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+    .doc h2 { font-size: 21px; margin: 32px 0 12px; }
+    .doc p { color: var(--ink); margin-bottom: 12px; }
+    .doc ul { padding-inline-start: 22px; margin-bottom: 12px; }
+    .doc li { margin-bottom: 9px; color: var(--ink); }
+    .doc .lead { font-size: 17.5px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header class="nav"><div class="nav-inner">
+    <a href="index.html"><img src="assets/logo.png" alt="Moodle Scraper" class="nav-logo"></a>
+  </div></header>
+
+  <main class="doc">
+    <a class="doc-back" href="index.html">→ חזרה לעמוד הבית</a>
+    <h1>מדיניות פרטיות</h1>
+    <p class="updated">עודכן לאחרונה: 20 ביוני 2026</p>
+
+    <p class="lead">
+      Moodle Scraper הוא תוסף דפדפן שמוריד את חומרי הקורסים שלך מהמודל אל תיקייה
+      במחשב שלך. הוא בנוי כדי לשמור את המידע שלך על המכשיר שלך - ושם בלבד.
+    </p>
+
+    <h2>למה התוסף ניגש</h2>
+    <ul>
+      <li><b>דפי המודל שלך.</b> כשמתחילים סנכרון, התוסף קורא את דפי הקורסים והקבצים של הקורסים שהגדרת, באמצעות החיבור הקיים שלך למודל בדפדפן - בדיוק כפי שהדפדפן עושה כשאתה לוחץ על קובץ במודל.</li>
+      <li><b>תיקייה מקומית שאתה בוחר.</b> דרך File System Access API של הדפדפן, התוסף כותב את הקבצים שהורדו לתיקייה שבחרת. הוא ניגש אך ורק לתיקייה שהענקת לו הרשאה אליה במפורש.</li>
+      <li><b>ההגדרות שלך.</b> ההגדרות (אוניברסיטה, סמסטר, רשימת קורסים, שם תיקייה) נשמרות באחסון המקומי של התוסף בדפדפן כדי שיישמרו בין הפעלות. שמות קורסים שזוהו נשמרים מקומית כדי להפעיל את מסך ההגדרה.</li>
+    </ul>
+
+    <h2>מה התוסף <u>לא</u> עושה</h2>
+    <ul>
+      <li><b>לא</b> שולח את הקבצים, נתוני הקורסים, פרטי ההתחברות או ההגדרות שלך לשום שרת. אין שרת אחורי. שום דבר לא מועלה לשום מקום.</li>
+      <li><b>לא</b> אוסף נתוני אנליטיקה, טלמטריה או מעקב.</li>
+      <li><b>לא</b> קורא או שומר את שם המשתמש או הסיסמה שלך במודל. הוא מסתמך אך ורק על החיבור שכבר פעיל בדפדפן שלך, ולעולם אינו מבקש או מטפל בפרטי ההתחברות שלך.</li>
+      <li><b>לא</b> משתף שום מידע עם צד שלישי.</li>
+    </ul>
+
+    <h2>אחסון מידע</h2>
+    <p>
+      כל המידע - הקבצים שהורדו, ההגדרות, ורשימות הקורסים השמורות - נשאר על המחשב שלך
+      (בתיקייה שבחרת ובאחסון המקומי של הדפדפן). אפשר למחוק אותו בכל עת על ידי מחיקת
+      הקבצים והסרת התוסף.
+    </p>
+
+    <h2>ההרשאות, בהסבר פשוט</h2>
+    <ul>
+      <li><code>storage</code> - שמירת ההגדרות ומטמון הקורסים שזוהו, מקומית.</li>
+      <li><code>activeTab</code> / <code>scripting</code> - הזרקת מנוע הסנכרון לדף המודל שאתה נמצא בו כשאתה מפעיל סנכרון.</li>
+      <li><code>notifications</code> - הצגת התראה שולחנית כשסנכרון מסתיים.</li>
+      <li>הרשאות לדומיינים של מודל (<code>*.ac.il</code>) - קריאת דפי הקורסים והקבצים שלך במהלך סנכרון.</li>
+    </ul>
+
+    <h2>יצירת קשר</h2>
+    <p>לשאלות בנוגע למדיניות זו, ניתן לפנות אלינו בכתובת <a href="mailto:MoodleScraper@theangelcy.co.il">MoodleScraper@theangelcy.co.il</a>.</p>
+  </main>
+
+  <footer class="footer"><div class="container">
+    <p class="footer-fine">© 2026 Moodle Scraper · נבנה עבור האקתון Hub02</p>
+  </div></footer>
+</body>
+</html>

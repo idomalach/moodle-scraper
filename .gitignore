@@ -14,4 +14,10 @@ moodle_sync_config.json
 שנה*/
 
 # Distributable build artifact (regenerated from the extension folder)
-moodle-scraper-v*.zip
+moodle-scraper*.zip
+
+# Landing-page build artifact (copied from the extension zip by build.sh)
+landing/assets/*.zip
+
+# Local tooling / preview config
+.claude/

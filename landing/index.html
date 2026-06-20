@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moodle Scraper - כל חומרי הקורסים שלך, מסודרים בלחיצה</title>
+  <meta name="description" content="תוסף חינמי לכרום שמוריד ומסדר אוטומטית את כל הקבצים מכל הקורסים שלך במודל - הרצאות, תרגולים, מצגות ומטלות. עובד עם 40+ מוסדות בישראל. הכול נשאר אצלך במחשב.">
+  <meta property="og:title" content="Moodle Scraper - כל חומרי הקורסים שלך, מסודרים בלחיצה">
+  <meta property="og:description" content="מוריד ומסדר אוטומטית את כל הקבצים מהמודל לתיקיות במחשב. חינמי, פרטי, עובד עם 40+ מוסדות בישראל.">
+  <meta property="og:image" content="assets/cover.png">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800;900&family=Rubik:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ── Top nav ───────────────────────────── -->
+  <header class="nav" id="nav">
+    <div class="nav-inner">
+      <img src="assets/logo.png" alt="Moodle Scraper" class="nav-logo">
+      <nav class="nav-links">
+        <a href="#features">תכונות</a>
+        <a href="#install">התקנה</a>
+        <a href="#use">שימוש</a>
+        <a class="nav-cta" href="assets/moodle-scraper.zip" download>הורדת התוסף</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ── Hero ──────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-glow"></div>
+    <div class="hero-grid">
+      <div class="hero-text reveal">
+        <span class="hero-badge">תוסף חינמי לכרום · 40+ מוסדות בישראל</span>
+        <h1>כל הקורסים שלך -<br><span class="grad">מסודרים יפה במחשב, בלחיצה אחת.</span></h1>
+        <p class="hero-sub">
+          התוסף מוריד את <strong>כל</strong> הקבצים <strong>מכל</strong> הקורסים שלך - הרצאות, תרגולים,
+          מצגות, סיכומים ומטלות - ומסדר אותם אוטומטית לתיקיות לפי קורס ונושא.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="assets/moodle-scraper.zip" download>
+            <span class="btn-ico">⬇</span> הורדת התוסף
+          </a>
+          <a class="btn btn-ghost" href="#install">איך מתקינים?</a>
+        </div>
+        <p class="hero-fineprint">גרסה 3.0 · ללא עלות · ללא הרשמה · הכול נשאר במחשב שלך 🔒</p>
+      </div>
+
+      <!-- Folder-tree showcase -->
+      <div class="hero-visual reveal">
+        <div class="window">
+          <div class="window-bar">
+            <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+            <span class="window-title">📁 ההורדות שלי</span>
+          </div>
+          <div class="window-body" dir="rtl">
+            <div class="tree">
+              <div class="t l0">📁 <b>סמסטר ב׳</b></div>
+              <div class="t l1">📁 מבוא למקרו־כלכלה</div>
+              <div class="t l2">📂 הרצאות</div>
+              <div class="t l2">📂 תרגולים</div>
+              <div class="t l2">📂 תרגילים</div>
+              <div class="t l2">📂 ההגשות שלי</div>
+              <div class="t l2 accent">📂 פתרונות מרצה</div>
+              <div class="t l1">📁 אלגברה לינארית</div>
+              <div class="t l2">📂 הרצאות</div>
+              <div class="t l2">📄 סילבוס.pdf</div>
+              <div class="t l1">📁 מבוא לסטטיסטיקה</div>
+              <div class="t l2 dim">📂 …</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ──────────────────────────── -->
+  <section class="section" id="features">
+    <div class="container">
+      <h2 class="reveal">מה התוסף עושה בשבילך</h2>
+      <p class="section-sub reveal">סוף לגרירת קבצים אחד-אחד מהמודל. הכול יורד ומסתדר לבד.</p>
+      <div class="cards">
+        <div class="card reveal"><div class="card-ico">📚</div><h3>הכול במקום אחד</h3><p>מוריד הרצאות, תרגולים, מצגות, סיכומים ומטלות מכל הקורסים שבחרת - בבת אחת.</p></div>
+        <div class="card reveal"><div class="card-ico">🗂️</div><h3>מסודר אוטומטית</h3><p>תיקייה לכל קורס, ותתי־תיקיות לפי נושא. אתה מקבל ארכיון נקי, לא ערימת קבצים.</p></div>
+        <div class="card reveal"><div class="card-ico">🔎</div><h3>תופס גם את מה שחבוי</h3><p>לא רק קבצים רגילים: סילבוסים מהפורטל הפנימי, קבצים מ‑Google Drive, תוכן בתוך תיקיות וקבצים מוטמעים שלא מופיעים ישירות במודל.</p></div>
+        <div class="card reveal"><div class="card-ico">🔄</div><h3>סנכרון חכם</h3><p>בהרצה הבאה מוריד רק מה שחדש. בלי להוריד שוב את מה שכבר יש לך, בלי לבזבז זמן.</p></div>
+        <div class="card reveal"><div class="card-ico">🏫</div><h3>40+ מוסדות</h3><p>מזהה אוטומטית את האוניברסיטה והקורסים שלך - אוניברסיטת בן גוריון, ת״א, העברית, הטכניון ועוד.</p></div>
+        <div class="card reveal"><div class="card-ico">🔒</div><h3>פרטי לחלוטין</h3><p>הכול קורה במחשב שלך. אין שרת, אין מעקב, שום מידע לא נשלח לאף אחד.</p></div>
+      </div>
+
+      <div class="special reveal">
+        <h3 class="special-title">📥 גם מה שקשה להוריד - אנחנו תופסים</h3>
+        <p class="special-sub">לא רק קבצים שמצורפים ישירות. התוסף יודע להגיע גם אל:</p>
+        <div class="chips">
+          <span class="chip">📄 סילבוסים מהפורטל הפנימי - ה‑PDF עצמו, לא רק קישור</span>
+          <span class="chip">🟢 קבצים מ‑<bdi>Google Drive</bdi>: <bdi>Slides</bdi> ו‑<bdi>Docs</bdi> ל‑<bdi>PDF</bdi>, <bdi>Sheets</bdi> ל‑<bdi>Excel</bdi></span>
+          <span class="chip">🗂️ קבצים בתוך תיקיות וקבצי ZIP - נפתחים ונשמרים בנפרד</span>
+          <span class="chip">🔗 קבצים מוטמעים בגוף הדף - לא רק משאבים רשמיים</span>
+          <span class="chip">📝 מבחנים ופתרונות - מסודרים לפי שנה ומועד</span>
+          <span class="chip">📑 יש גם מצגת וגם PDF? נשמר ה‑PDF הנוח, בלי כפילות</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Install ───────────────────────────── -->
+  <section class="section section-alt" id="install">
+    <div class="container narrow">
+      <h2 class="reveal">התקנה ב־2 דקות</h2>
+      <p class="section-sub reveal">הורדה ידנית פשוטה. <span class="soon">🧩 בקרוב גם בחנות התוספים הרשמית של כרום</span></p>
+
+      <div class="dl-box reveal">
+        <a class="btn btn-primary btn-lg" href="assets/moodle-scraper.zip" download>
+          <span class="btn-ico">⬇</span> הורדת התוסף
+        </a>
+        <span class="dl-meta">גרסה 3.0 · ~300KB</span>
+      </div>
+
+      <ol class="steps">
+        <li class="reveal"><span class="num">1</span><div><b>הורידו וחלצו</b> את קובץ ה־ZIP (קליק ימני ← "חלץ הכול"). תיווצר תיקייה בשם <code>moodle-scraper</code>.</div></li>
+        <li class="reveal"><span class="num">2</span><div>בכרום, גשו לכתובת <code>chrome://extensions</code> (העתיקו לשורת הכתובת).</div></li>
+        <li class="reveal"><span class="num">3</span><div>הדליקו את <b>"מצב פיתוח"</b> (Developer mode) - המתג נמצא בראש העמוד, בפינה הימנית.</div></li>
+        <li class="reveal"><span class="num">4</span><div>לחצו על הכפתור <b>"Load unpacked"</b> שמופיע בפינה השמאלית העליונה, ובחרו את התיקייה שחילצתם.</div></li>
+        <li class="reveal"><span class="num">5</span><div>סיימתם! נעצו 📌 את התוסף לסרגל הכלים ופתחו אותו.</div></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ── How to use ────────────────────────── -->
+  <section class="section" id="use">
+    <div class="container narrow">
+      <h2 class="reveal">איך משתמשים</h2>
+      <div class="usebars">
+        <div class="usebar reveal"><span class="num">1</span><div><b>היכנסו למודל</b> של המוסד שלכם והתחברו כרגיל.</div></div>
+        <div class="usebar reveal"><span class="num">2</span><div><b>פתחו את ההגדרות</b> של התוסף, בחרו תיקיית יעד, ואשרו את רשימת הקורסים - היא מזוהה אוטומטית.</div></div>
+        <div class="usebar reveal"><span class="num">3</span><div>לחצו <b>"הורדה ראשונית"</b> כדי להוריד את הכול. בכל פעם הבאה - לחצו <b>"סנכרון"</b> וזהו.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Privacy ───────────────────────────── -->
+  <section class="section section-alt">
+    <div class="container narrow privacy reveal">
+      <div class="privacy-ico">🔒</div>
+      <h2>הפרטיות שלך, קודם כול</h2>
+      <p>
+        כל הפעולה מתבצעת <strong>במחשב שלכם בלבד</strong>. התוסף ניגש למודל דרך החשבון שכבר מחובר אצלכם,
+        מוריד את הקבצים ישירות לתיקייה שבחרתם, ו<strong>לא שולח שום מידע</strong> לשרת חיצוני - אין שרת, אין מעקב,
+        אין איסוף נתונים.
+      </p>
+      <a class="btn btn-ghost" href="privacy.html">מדיניות הפרטיות המלאה</a>
+    </div>
+  </section>
+
+  <!-- ── Footer ────────────────────────────── -->
+  <footer class="footer">
+    <div class="container">
+      <img src="assets/cover.png" alt="Moodle Scraper × Hub02" class="footer-cover reveal">
+      <p class="footer-credit">נבנה עבור האקתון <b>Hub02</b> · קהילת הסטודנטים של הנגב 🧡</p>
+      <p class="footer-fine">© 2026 Moodle Scraper · כל הזכויות שמורות · <a href="mailto:MoodleScraper@theangelcy.co.il">צרו קשר</a></p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
