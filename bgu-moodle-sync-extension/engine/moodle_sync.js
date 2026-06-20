@@ -442,6 +442,13 @@
     return Object.keys(cm.items).some(k => k.startsWith(prefix));
   }
 
+  /** SHA-256 hex of a Blob — used for content-based de-duplication. */
+  async function sha256Hex(blob) {
+    const buf = await blob.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   /**
    * Fetch a CROSS-ORIGIN URL (e.g. the BGU bgu4u syllabus portal) via the
    * extension background service worker. The engine runs in the page main
@@ -978,16 +985,16 @@
   }
 
   /** Download a file and save it to the correct location (with retry) */
-  async function downloadAndSave(item, courseHandle, maxRetries = 3) {
+  async function downloadAndSave(item, courseHandle, seenHashes, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const result = await _downloadAndSaveOnce(item, courseHandle);
-      if (result.success || result.skippedHtml || attempt === maxRetries) return result;
+      const result = await _downloadAndSaveOnce(item, courseHandle, seenHashes);
+      if (result.success || result.skippedHtml || result.skippedDuplicate || attempt === maxRetries) return result;
       log(`  ⟳ Retry ${attempt}/${maxRetries - 1} for ${item.name} (${result.error})`);
       await delay(1000 * attempt); // 1s, 2s, 3s backoff
     }
   }
 
-  async function _downloadAndSaveOnce(item, courseHandle) {
+  async function _downloadAndSaveOnce(item, courseHandle, seenHashes) {
     const fetchUrl = item.fetchUrl || (item.direct
       ? item.url
       : `${CONFIG.baseUrl}${CONFIG.basePath}mod/resource/view.php?id=${item.cmid}`);
@@ -1054,6 +1061,17 @@
       const contentLength = blob.size;
       const etag = resp.headers.get('etag') || '';
 
+      // Content hash (for the manifest + de-duplication).
+      let contentHash = '';
+      try { contentHash = await sha256Hex(blob); } catch (e) { /* hashing is best-effort */ }
+      // Assign-page professor files are de-duplicated against the main course
+      // page: if this exact file (byte-identical) was already saved in this
+      // course, drop the assign copy. Unique files (e.g. an assign-only
+      // question) have no match and are kept.
+      if (item.dedupAgainstCourse && contentHash && seenHashes && seenHashes.has(contentHash)) {
+        return { success: false, skippedDuplicate: true, error: 'duplicate of a file already on the main course page', contentHash };
+      }
+
       // Build filename
       let fileName = normalizeName(item.name);
       if (ext && !fileName.toLowerCase().endsWith(ext.toLowerCase())) {
@@ -1081,6 +1099,7 @@
           savedAs: savedFiles.map(f => item.diskFolder ? `${item.diskFolder}/${f}` : f),
           fileSize: contentLength,
           etag,
+          contentHash,
           extracted: true,
           extractedCount: savedFiles.length,
         };
@@ -1094,6 +1113,7 @@
         savedAs: item.diskFolder ? `${item.diskFolder}/${finalName}` : finalName,
         fileSize: contentLength,
         etag,
+        contentHash,
         extracted: false,
       };
     } catch (e) {
@@ -1815,6 +1835,10 @@
       log('Step 4/8: Resolving URLs and expanding folders...');
       const downloadQueue = [];
       const skipQueue = [];
+      // Professor files from assign pages — queued LAST so main-page copies are
+      // downloaded (and hashed) first, letting content-dedup drop the assign
+      // copy when it's identical to a main-page file (keeping unique ones).
+      const lateQueue = [];
       // Track cmids we skip re-resolving in incremental mode (already known),
       // so the "unchanged course" fast-path below still counts them.
       const knownSkippedCmids = {};
@@ -1918,23 +1942,25 @@
             const sm = state.sectionMap[item.courseId] || {};
             const baseFolder = (sm[item.section] && sm[item.section].folder) || item.section;
             for (const file of files) {
-              // Only take the student's OWN submission from an assignment page.
-              // The professor's brief/solution attached here (component
-              // mod_assign / assignfeedback) is also published on the main
-              // course page, so pulling it from both would duplicate it.
-              // Submissions are uniquely the "assignsubmission_file" component
-              // (file.isSubmission).
-              if (!file.isSubmission) continue;
-              downloadQueue.push({
-                ...item,
-                name: file.name,
-                url: file.url,
-                direct: true,
-                fetchUrl: file.url,
-                isChild: true,
-                parentCmid: item.cmid,
-                diskFolder: `${baseFolder}/הגשות`,
-              });
+              if (file.isSubmission) {
+                // The student's OWN submission — always kept, → הגשות.
+                downloadQueue.push({
+                  ...item, name: file.name, url: file.url, direct: true,
+                  fetchUrl: file.url, isChild: true, parentCmid: item.cmid,
+                  diskFolder: `${baseFolder}/הגשות`,
+                });
+              } else {
+                // Professor's brief/solution on the assign page. Usually ALSO on
+                // the main course page → flag for content-dedup and queue last,
+                // so an exact duplicate of a main-page file is dropped while a
+                // unique one (e.g. an assign-only question) is kept.
+                const diskFolder = isSolutionFile(file.name) ? `${baseFolder}/פתרונות מרצה` : `${baseFolder}/תרגילים`;
+                lateQueue.push({
+                  ...item, name: file.name, url: file.url, direct: true,
+                  fetchUrl: file.url, isChild: true, parentCmid: item.cmid,
+                  diskFolder, dedupAgainstCourse: true,
+                });
+              }
             }
           }
           await delay(CONFIG.delayBetweenFetches);
@@ -1943,6 +1969,10 @@
           skipQueue.push({ ...item, reason: `unknown type: mod/${item.type}` });
         }
       }
+
+      // Append assign professor-files last, so main-page files are downloaded
+      // and hashed first and win the content-dedup.
+      downloadQueue.push(...lateQueue);
 
       log(`  Download queue: ${downloadQueue.length} files`);
       log(`  Skip queue: ${skipQueue.length} items`);
@@ -2102,7 +2132,21 @@
       log(`Step 6/8: Downloading ${downloadQueue.length} files...`);
       let downloaded = 0;
       let failed = 0;
+      let deduped = 0;
       const downloadedFiles = [];  // track names for end-of-sync report
+
+      // Per-course content-hash sets for de-duplication. Preload hashes already
+      // recorded in the manifest so assign files also dedupe against files
+      // downloaded in earlier runs.
+      const seenHashesByCourse = {};
+      for (const [cid, cdata] of Object.entries(state.manifest)) {
+        if (!cdata.items) continue;
+        const set = new Set();
+        for (const e of Object.values(cdata.items)) {
+          if (e.contentHash && (e.status === 'downloaded' || e.status === 'extracted')) set.add(e.contentHash);
+        }
+        seenHashesByCourse[cid] = set;
+      }
 
       // === DRY RUN: skip download, manifest, and output generation ===
       if (dryRun) {
@@ -2171,7 +2215,8 @@
             }
           }
 
-          const result = await downloadAndSave(item, courseHandle);
+          const courseHashes = seenHashesByCourse[item.courseId] || (seenHashesByCourse[item.courseId] = new Set());
+          const result = await downloadAndSave(item, courseHandle, courseHashes);
           const key = manifestKey(item);
 
           // Update progress
@@ -2203,11 +2248,27 @@
               savedAs: result.savedAs,
               fileSize: result.fileSize,
               etag: result.etag || '',
+              contentHash: result.contentHash || '',
               downloadedAt: new Date().toISOString(),
             };
+            if (result.contentHash) courseHashes.add(result.contentHash);
             if (result.extracted) {
               log(`  ✓ Extracted ${result.extractedCount} files from ${item.name}`);
             }
+          } else if (result.skippedDuplicate) {
+            // An assign-page copy of a file already saved from the main course
+            // page. Record it as skipped so incremental runs don't re-fetch +
+            // re-dedup it every time.
+            deduped++;
+            log(`  ⏭ Deduplicated "${item.name}" — already on the main course page`);
+            state.manifest[item.courseId].items[key] = {
+              section: item.section,
+              moodleName: item.name,
+              type: item.type,
+              status: 'skipped',
+              reason: 'duplicate of main course page',
+              skippedAt: new Date().toISOString(),
+            };
           } else {
             failed++;
             log(`  ✗ FAILED: ${item.name} — ${result.error}`);
@@ -2222,7 +2283,7 @@
           await delay(CONFIG.delayBetweenFetches);
         }
 
-        log(`  Downloads complete: ${downloaded} ok, ${failed} failed`);
+        log(`  Downloads complete: ${downloaded} ok, ${failed} failed, ${deduped} duplicates skipped`);
 
         // Step 7: Save manifest with section mappings
         state.progressPercent = 92; state.progressStep = 'Saving manifest...';
