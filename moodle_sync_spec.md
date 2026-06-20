@@ -33,7 +33,7 @@ This spec is **reusable across semesters**. See "New Semester Setup" at the bott
   קבצים שלא הורדו.xlsx           ← all skipped items, all courses
   קורסים שנה ג׳ סמסטר ב׳.xlsx    ← existing course overview, keep untouched
   הנדסת חשמל/
-    README.md                    ← auto-generated course overview
+    סטטוס סנכרון.xlsx             ← auto-generated sync status
     הרצאות/
       חוברת קורס חשמל ומערכות ספרתיות 2026.rar
       ...
@@ -275,46 +275,16 @@ One file at the semester root, shared across all courses. **Updated on every syn
 
 ---
 
-## Course Overview (`README.md`)
+## Per-Course Status (`סטטוס סנכרון.xlsx`)
 
-Each course folder contains an auto-generated `README.md` that serves as a table of contents. It is regenerated on every sync run (seed or incremental). Format:
+Each course folder contains an auto-generated `סטטוס סנכרון.xlsx` that shows sync status. It is regenerated on every sync run (seed or incremental). Format:
 
-```markdown
-# הנדסת חשמל ומערכות ספרתיות
-Last synced: 2026-03-31
+- **First row (merged):** `עדכון אחרון: [date] [time]` — the last sync timestamp
+- **Remaining rows:** Items that weren't downloaded, with columns matching the semester-level skip report (קורס, מיקום במוודל, שם, קישור, סיבה, תאריך)
 
-## הרצאות (3 files)
-- חוברת קורס חשמל ומערכות ספרתיות 2026.rar
-- חוברת תרגילים 2026.pdf
-- סיליבוס 2026.pdf
+A semester-level combined report (`סטטוס סנכרון - כל הקורסים.xlsx`) is also generated when all configured courses have manifest entries. It merges rows from all per-course status files.
 
-## תרגול כיתה (12 files)
-- תרגול 1.pdf
-- תרגול 2.pdf
-- ...
-
-## תרגילי בית (13 files)
-- תרגיל בית מספר 1.pdf
-- תרגיל בית מספר 2.pdf
-- ...
-- פתרונות/ (merged from "פתרונות תרגילי בית")
-  - פתרון תרגיל בית 1.pdf
-  - פתרון תרגיל בית 2.pdf
-
-## מבחנים משנים קודמות (15 files)
-- מועד א 22.7.20/
-  - מועד א 22.7.20.pdf
-  - פתרון מועד א 22.7.20.pdf
-- מבחן ופתרון מועד א 2025.pdf
-```
-
-**Rules:**
-- List every downloaded file in its on-disk location.
-- Show subfolders (פתרונות, mod/folder subfolders, exam groupings) as nested entries.
-- For merged sections, note the original section range in the heading.
-- For solution sections merged into parent, note "(merged from [original section name])".
-- Include file count per section.
-- Do not list skipped items (those are in the Excel file).
+**Note:** Old per-course `README.md` files from previous versions are automatically cleaned up by the engine.
 
 ---
 
@@ -686,42 +656,121 @@ Each time the sync process (seed or incremental) learns something new — a new 
 
 ---
 
-## Unified Sync Engine (`moodle_sync.js` v2.6)
+## Unified Sync Engine (`moodle_sync.js` v3.0)
 
-The entire download pipeline is encoded in a single JavaScript file (`moodle_sync.js`) that runs in any Moodle tab. It handles both seed and incremental syncs via a sidebar UI.
+The entire download pipeline is encoded in a single JavaScript file (`moodle_sync.js`) that runs in any Moodle tab. It handles both seed and incremental syncs. When run via the Chrome extension, sync is controlled from the extension popup and progress is displayed via a floating toast. When pasted into the console, the engine exposes `window.__MOODLE_SYNC_API__` for programmatic control.
 
 ### How to Run
 
 1. Navigate to any `moodle.bgu.ac.il` page in Chrome (must be logged in).
 2. Load the engine. Two options:
    - **Manual (console):** Paste the contents of `moodle_sync.js` into the browser console.
-   - **Automated (Claude in Chrome / scheduled task):** Inject the config via `javascript_tool`, then serve the engine via a temporary localhost HTTP server and let the browser fetch it:
+   - **Automated (Claude in Chrome / scheduled task):** Uses **cached injection with hash-based invalidation (S12)**. The engine source is cached in IndexedDB after the first full injection. Subsequent runs check a SHA-256 hash — if the engine file hasn't changed, it loads from cache in a single `javascript_tool` call. Full chunked injection only happens on the first run or after a code change.
+
+     **Step 0 — Compute engine hash (bash):**
+     ```bash
+     ENGINE_HASH=$(shasum -a 256 "/path/to/moodle_sync.js" | cut -d' ' -f1)
+     ```
+
+     **Step 1 — Inject config:**
      ```javascript
-     // 1. Inject config (read from local moodle_sync_config.json)
      window.__MOODLE_SYNC_CONFIG__ = { /* ... config JSON ... */ };
      ```
+
+     **Step 2 — Inject bootstrapper (attempts cache load):**
+     ```javascript
+     (async () => {
+       const EXPECTED_HASH = "<ENGINE_HASH>";
+       function openIDB() {
+         return new Promise((resolve, reject) => {
+           const req = indexedDB.open('MoodleSyncBackup', 2);
+           req.onupgradeneeded = (e) => {
+             const db = e.target.result;
+             if (!db.objectStoreNames.contains('backups')) db.createObjectStore('backups');
+           };
+           req.onsuccess = () => resolve(req.result);
+           req.onerror = () => reject(req.error);
+         });
+       }
+       async function idbGet(key) {
+         const db = await openIDB();
+         return new Promise((resolve, reject) => {
+           const tx = db.transaction('backups', 'readonly');
+           const req = tx.objectStore('backups').get(key);
+           req.onsuccess = () => resolve(req.result ?? null);
+           req.onerror = () => reject(req.error);
+         });
+       }
+       try {
+         const cachedHash = await idbGet('engineHash');
+         if (cachedHash === EXPECTED_HASH) {
+           const cachedSource = await idbGet('engineSource');
+           if (cachedSource) {
+             eval(cachedSource);
+             return 'ENGINE_CACHED';
+           }
+         }
+       } catch (e) {}
+       return 'ENGINE_MISS';
+     })()
+     ```
+
+     **If bootstrapper returned `ENGINE_CACHED`:** Done — engine is running. Skip to step 3 below ("A sidebar appears…"). This is the fast path: **2 `javascript_tool` calls total** (config + bootstrapper).
+
+     **If bootstrapper returned `ENGINE_MISS`:** Fall back to full gzip + base64 chunked injection. A localhost server won't work because the Claude sandbox's `localhost` is unreachable from the Mac's Chrome browser.
+
      ```bash
-     # 2. Start a temporary HTTP server serving the engine
-     cd "/path/to/Moodle content download" && python3 -m http.server 18765 &
+     # Compress and base64-encode the engine, split into ~15KB chunks
+     gzip -c "/path/to/moodle_sync.js" | base64 | tr -d '\n' | fold -w 15000 > /tmp/engine_chunks.txt
      ```
      ```javascript
-     // 3. Let the browser fetch and eval the engine (no chunking needed)
-     fetch('http://localhost:18765/moodle_sync.js')
-       .then(r => r.text()).then(code => eval(code))
+     // For each chunk line, call javascript_tool:
+     window.__EC = (window.__EC || []); window.__EC.push("<chunk>");
      ```
-     ```bash
-     # 4. Kill the server
-     kill <PID>
+     ```javascript
+     // Final call — decompress, cache, and execute:
+     (async () => {
+       const EXPECTED_HASH = "<ENGINE_HASH>";
+       const b64 = window.__EC.join('');
+       const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+       const ds = new DecompressionStream('gzip');
+       const writer = ds.writable.getWriter();
+       writer.write(bytes); writer.close();
+       const reader = ds.readable.getReader();
+       let chunks = [];
+       while (true) { const {done, value} = await reader.read(); if (done) break; chunks.push(value); }
+       const text = new TextDecoder().decode(new Uint8Array(chunks.flatMap(c => [...c])));
+
+       // S12 — Cache engine source + hash in IndexedDB for future runs
+       try {
+         const db = await new Promise((resolve, reject) => {
+           const req = indexedDB.open('MoodleSyncBackup', 2);
+           req.onupgradeneeded = (e) => {
+             if (!e.target.result.objectStoreNames.contains('backups'))
+               e.target.result.createObjectStore('backups');
+           };
+           req.onsuccess = () => resolve(req.result);
+           req.onerror = () => reject(req.error);
+         });
+         await new Promise((resolve, reject) => {
+           const tx = db.transaction('backups', 'readwrite');
+           const store = tx.objectStore('backups');
+           store.put(text, 'engineSource');
+           store.put(EXPECTED_HASH, 'engineHash');
+           tx.oncomplete = () => resolve();
+           tx.onerror = () => reject(tx.error);
+         });
+       } catch (e) { console.warn('[MoodleSync] Failed to cache engine:', e); }
+
+       eval(text);
+       return 'Engine loaded and cached';
+     })()
      ```
-     This avoids the 60KB engine exceeding `javascript_tool`'s practical input limit. Moodle has no CSP header, so localhost fetch works.
+     The full injection path takes ~22 `javascript_tool` calls (config + bootstrapper miss + ~19 data chunks + 1 decompress-cache-eval). But this only happens on the **first run** or after the engine file changes. The 76KB engine compresses to ~27KB base64. No server, no network access, no mixed-content issues.
      The local filesystem is the source of truth. The GitHub repo (`github.com/idomalach/bgu-moodle-sync`) is for open-source distribution only, not for runtime use.
-3. A sidebar appears on the right with three buttons: **Seed Run (Full)**, **Incremental Sync**, and **Dry Run (Preview)**.
-4. Click one. On the first run, the browser's directory picker opens — point it to the **year folder** (e.g. `שנה ג׳`). The engine navigates into the semester subfolder (e.g. `סמסטר ב׳`) automatically via `rootPath`. The handle is cached in IndexedDB (S3 patch), so subsequent runs skip the picker.
-5. The engine scrapes all 5 courses, resolves URLs, expands folders, downloads files, saves the manifest, generates READMEs, and produces the Excel log. All automatically.
-
-### Dry Run Mode
-
-The **Dry Run (Preview)** button runs the full incremental pipeline (steps 1–5: folder access, manifest load, scrape, resolve, filter) but skips all writes (steps 6–8: no downloads, no manifest update, no Excel/README generation). It prints a detailed report of what *would* happen: which files would be downloaded (new vs. updated), which would be skipped, and why. No sync lock is acquired. Useful for verifying that the engine sees the right items before committing to a real sync.
+3. The engine initializes and exposes `window.__MOODLE_SYNC_API__` with `startSync(mode)`, `getStatus()`, and `getLog()`. When using the Chrome extension, the popup provides **Seed Run (Full)** and **Incremental Sync** buttons. Progress is shown in a floating toast in the bottom-right corner of the page.
+4. On the first run, a folder picker opens (via a toast button that provides the required user gesture) — point it to the **year folder** (e.g. `שנה ג׳`). The engine navigates into the semester subfolder (e.g. `סמסטר ב׳`) automatically via `rootPath`. The handle is cached in IndexedDB (S3 patch), so subsequent runs skip the picker.
+5. The engine scrapes all active courses (those not toggled off via `course.disabled`), resolves URLs, expands folders, downloads files, saves the manifest, generates per-course status XLS files, and produces the Excel log. All automatically.
 
 ### Architecture (8-step pipeline)
 
@@ -737,7 +786,7 @@ The **Dry Run (Preview)** button runs the full incremental pipeline (steps 1–5
 5. **Incremental filter** (incremental mode only) — remove items already in the manifest. Uses smart HEAD optimization: if a course's scraped cmid set is identical to its manifest cmid set, all HEAD requests for that course are skipped entirely (no items changed). Only courses with new or removed items trigger HEAD checks for update detection. This reduces HEAD requests from O(total items) to O(changed items) on typical days.
 6. **Download** — fetch each queued file (with up to 3 retries and exponential backoff), detect extension from headers, normalize filename, try ZIP extraction (JSZip from CDN), write to correct subfolder via File System Access API. Handle duplicates by appending `(2)`, `(3)`, etc. A progress bar shows real-time completion percentage.
 7. **Save manifest** — write updated manifest with section mappings, file sizes, timestamps.
-8. **Generate outputs** — write `README.md` per course, merge new entries into `קבצים שלא הורדו.xlsx` (SheetJS from CDN) preserving previous entries and deduplicating by URL+Name.
+8. **Generate outputs** — write `סטטוס סנכרון.xlsx` per course (last sync time + list of items not downloaded), generate `סטטוס סנכרון - כל הקורסים.xlsx` at the semester level, and merge new entries into `קבצים שלא הורדו.xlsx` (SheetJS, bundled in extension or loaded from CDN) preserving previous entries and deduplicating by URL+Name.
 
 ### Manifest Structure (`.moodle_manifest.json`)
 
@@ -782,7 +831,7 @@ Key design decisions:
 - **File sizes tracked** for future ETag/content-length-based update detection in incremental mode.
 - **Status values:** `downloaded`, `extracted` (ZIP was unpacked), `removed_from_moodle` (item disappeared from Moodle but file kept on disk).
 
-### Known Limitations (v2.6)
+### Known Limitations (v3.0)
 
 - **Colab notebooks:** Skipped with a log entry. Colab requires navigating to each notebook URL in a separate tab and extracting via `colab.global.notebook` — cannot be done from the Moodle tab. A future version could open Colab tabs and use `BroadcastChannel` to collect notebooks.
 - **BGU admin syllabi:** Skipped with a log entry. Requires same-origin fetch from a `bgu4u.bgu.ac.il` tab with active SSO session — cannot be done cross-origin from Moodle.
@@ -799,7 +848,7 @@ Both are loaded lazily: SheetJS only when generating the Excel file, JSZip only 
 
 ---
 
-## Safety Rules (v2.6 — S1–S8 added 2026-04-03, S9–S11 added 2026-04-03 evening)
+## Safety Rules (S1–S8 added 2026-04-03, S9–S11 added 2026-04-03 evening, S12 added 2026-04-04)
 
 These rules were added after an incident where the scheduled incremental sync re-downloaded every file because `loadManifest()` silently returned `{}` when the FUSE mount was deadlocked. The silent `catch { return {} }` in loadManifest was the single point of failure — an empty manifest in incremental mode is indistinguishable from a seed run.
 
@@ -852,3 +901,66 @@ This prevents two failure modes: (1) concurrent syncs from multiple tabs, and (2
 ### S11 — Filesystem health check
 
 Before reading the manifest, the engine performs a canary write: creates a small temporary file (`.moodle_sync_canary`), writes `"ok"`, closes it, and deletes it. This is wrapped in a 5-second timeout via `Promise.race()`. If the canary write times out or throws, the FUSE mount is considered deadlocked, and the engine skips the filesystem entirely — going straight to the IndexedDB manifest backup (S2). This prevents the silent `catch { return {} }` scenario that caused the 2026-04-03 re-download incident.
+
+### S12 — Cached engine injection with hash-based invalidation (added 2026-04-04)
+
+The engine source (~76KB) was previously injected via ~20 gzip + base64 chunks on every scheduled run, even when the code hadn't changed. This was slow and token-expensive. S12 adds an IndexedDB caching layer to the injection flow:
+
+- **On first run (or after code change):** The full chunked injection runs as before, but the final decompress-and-eval step also writes the decompressed engine source and its SHA-256 hash to IndexedDB (keys `engineSource` and `engineHash`).
+- **On subsequent runs:** A small bootstrapper (~30 lines) is injected via a single `javascript_tool` call. It reads the cached hash from IndexedDB and compares it to the expected hash (computed from the file on disk in bash). If they match, it loads and evals the cached source — **2 total `javascript_tool` calls** (config + bootstrapper) instead of ~22. If the hash doesn't match (code was updated), the bootstrapper returns `ENGINE_MISS` and the scheduled task falls back to full chunked injection.
+
+This reduces token cost by ~90% on typical runs where the engine hasn't changed. The cache is automatically invalidated whenever `moodle_sync.js` is modified — no manual cache-clearing needed.
+
+Note: The bootstrapper includes its own inline IndexedDB helpers (identical to the engine's `openIDB`/`idbGet`) because the engine isn't loaded yet when the bootstrapper runs. It reuses the same `MoodleSyncBackup` database and `backups` object store.
+
+---
+
+## Chrome Extension Architecture (v2.0 / Engine v3.0)
+
+### UI Model: Floating Toast + Popup Controls
+
+The engine no longer creates an in-page sidebar. Instead:
+
+- **Extension Popup** is the primary control surface: shows university, semester, course count, and provides three sync buttons (Seed Run, Incremental Sync, Dry Run). The popup does not need to stay open during sync.
+- **Floating Toast** is a small (300×80px) non-blocking overlay in the bottom-right corner that appears only during sync. Shows progress bar, current operation text, and percentage. Has a dismiss button. Disappears automatically on completion.
+- **Desktop Notification** fires when sync finishes with a summary of results.
+
+### Engine API
+
+The engine exposes `window.__MOODLE_SYNC_API__` for external control:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `startSync(mode)` | void | Starts a sync. Mode: `'seed'`, `'incremental'`, or `'dry'` |
+| `getStatus()` | object | `{ running, progress, mode, results, needsConfig, ready, courses, currentOp }` |
+| `getLog()` | string[] | Full log array |
+
+### Communication Flow
+
+```
+Popup → chrome.runtime.sendMessage → Content Script → inject <script> → Engine API
+Engine API → window.postMessage → Content Script → sendResponse → Popup
+```
+
+The content script bridges between the popup (extension context) and the engine (page main world) using injected script snippets and `window.postMessage`.
+
+### Generalization Features
+
+1. **basePath**: Configurable URL path prefix (e.g., `/moodle/` for BGU, `/2025-26/` for HUJI). All Moodle URL constructions use `CONFIG.basePath`.
+2. **Login Selectors**: `CONFIG.loginSelectors` (CSS selectors) and `CONFIG.loginTextMatches` (text patterns) replace hardcoded login detection.
+3. **Semester Flexibility**: `CONFIG.semesterCheck` supports comma-separated values (e.g., `"סמ 2,סמסטר ב,2025B"`).
+4. **Bundled Libraries**: SheetJS and JSZip are bundled in the extension (`engine/lib/`) with CDN fallback for console-paste users.
+5. **Institution Auto-Detection**: Content script matches `window.location.hostname` against known presets.
+6. **Dashboard Course Detection**: On Moodle dashboard pages, enrolled courses are automatically scraped and stored for config pre-fill.
+
+### Extension File Map
+
+| File | Role |
+|------|------|
+| `manifest.json` | MV3 manifest with 40+ Israeli Moodle domains |
+| `content.js` | Injection orchestrator, message bridge, dashboard detection |
+| `popup.html/js/css` | Sync controls and status display |
+| `options.html/js/css` | Full config editor with 30+ university presets |
+| `engine/moodle_sync.js` | The sync engine (v3.0) |
+| `engine/lib/xlsx.full.min.js` | Bundled SheetJS |
+| `engine/lib/jszip.min.js` | Bundled JSZip |

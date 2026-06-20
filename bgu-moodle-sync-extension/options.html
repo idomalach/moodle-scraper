@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moodle Scraper — Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <img src="icons/icon48.png" alt="" class="header-logo">
+      <div>
+        <h1>Moodle Scraper</h1>
+        <p class="subtitle">Your sync setup</p>
+      </div>
+    </header>
+
+    <!-- ── Toast ──────────────────────────────── -->
+    <div class="toast" id="toast"></div>
+
+    <!-- ── Onboarding (first-time only) ──────── -->
+    <section class="card onboarding" id="onboarding" style="display:none;">
+      <div class="onboarding-illustration">
+        <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="20" y="40" width="80" height="56" rx="6" stroke="#007aff" stroke-width="2.5" fill="none"/>
+          <path d="M20 52h80" stroke="#007aff" stroke-width="2.5"/>
+          <circle cx="30" cy="46" r="2" fill="#007aff"/>
+          <circle cx="38" cy="46" r="2" fill="#007aff"/>
+          <circle cx="46" cy="46" r="2" fill="#007aff"/>
+          <path d="M60 24l-18 16h12v8h12v-8h12L60 24z" stroke="#007aff" stroke-width="2.5" fill="none" stroke-linejoin="round"/>
+          <rect x="40" y="64" width="16" height="4" rx="2" fill="#007aff" opacity="0.3"/>
+          <rect x="40" y="72" width="40" height="4" rx="2" fill="#007aff" opacity="0.3"/>
+          <rect x="40" y="80" width="28" height="4" rx="2" fill="#007aff" opacity="0.3"/>
+        </svg>
+      </div>
+      <h2>Let's get you set up</h2>
+      <p>Three quick steps and you're syncing.</p>
+      <div class="onboarding-steps">
+        <div class="onboarding-step">
+          <span class="step-number">1</span>
+          <span class="step-text">Open your Moodle dashboard and log in</span>
+        </div>
+        <div class="onboarding-step">
+          <span class="step-number">2</span>
+          <span class="step-text">Come back here — we'll detect your university and courses automatically</span>
+        </div>
+        <div class="onboarding-step">
+          <span class="step-number">3</span>
+          <span class="step-text">Review your setup and hit Save</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── University Card ────────────────────── -->
+    <section class="card" id="universityCard" style="display:none;">
+      <div class="card-title-row">
+        <h2>University</h2>
+        <span class="locked-display" id="uniLocked"></span>
+        <button class="btn-edit" id="btnEditUni" type="button">Edit</button>
+      </div>
+
+      <!-- Edit state -->
+      <div class="edit-fields" id="uniEditFields">
+        <label for="universityPreset">University</label>
+        <select id="universityPreset">
+          <option value="">— Select —</option>
+        </select>
+
+        <label for="baseUrl">Moodle URL</label>
+        <input type="url" id="baseUrl" placeholder="https://moodle.example.ac.il" dir="ltr">
+        <p class="hint">Your university's Moodle address</p>
+
+        <label for="basePath">Path prefix</label>
+        <input type="text" id="basePath" placeholder="e.g. /moodle/ or /" dir="ltr">
+        <p class="hint">Usually "/" — BGU uses "/moodle/", HUJI uses "/2025-26/"</p>
+
+        <label for="universityName">Display name</label>
+        <input type="text" id="universityName" placeholder="e.g. Ben-Gurion University">
+      </div>
+    </section>
+
+    <!-- ── Semester Card ──────────────────────── -->
+    <section class="card" id="semesterCard" style="display:none;">
+      <div class="card-title-row">
+        <h2>Semester</h2>
+        <span class="locked-display" id="semLocked" dir="rtl"></span>
+        <button class="btn-edit" id="btnEditSemester" type="button">Edit</button>
+      </div>
+
+      <!-- Edit state -->
+      <div class="edit-fields" id="semEditFields">
+        <label for="semesterCheck">Semester identifier</label>
+        <input type="text" id="semesterCheck" placeholder="e.g. סמ 2" dir="rtl">
+        <p class="hint">The text in Moodle course titles for this semester</p>
+
+        <label for="rootPath">Semester folder name</label>
+        <input type="text" id="rootPath" placeholder="e.g. סמסטר ב׳" dir="rtl">
+        <p class="hint">Subfolder created inside your download folder</p>
+      </div>
+    </section>
+
+    <!-- ── Download Folder Card ───────────────── -->
+    <section class="card" id="folderCard" style="display:none;">
+      <h2>Download folder</h2>
+      <p class="hint" style="margin-bottom:12px;">Where your course files are saved. Picked once, remembered forever.</p>
+
+      <div class="folder-picker-row">
+        <button id="btnPickFolder" class="btn btn-outline" type="button">Choose Folder</button>
+        <span id="folderStatus" class="folder-status">No folder selected</span>
+      </div>
+      <p class="hint" id="folderHint" style="display:none;">The semester subfolder will be created inside this folder automatically.</p>
+    </section>
+
+    <!-- ── Courses Card ───────────────────────── -->
+    <section class="card" id="coursesCard" style="display:none;">
+      <h2>Courses</h2>
+      <p class="hint" style="margin-bottom:12px;">Your synced courses. Toggle off to skip without removing.</p>
+
+      <div id="courseList"></div>
+
+      <div class="course-actions">
+        <button id="btnAddCourse" class="btn btn-outline" type="button">+ Add Course</button>
+        <button id="btnApplyDetected" class="btn btn-outline" type="button">Apply auto-detected</button>
+        <button id="btnRemoveAll" class="btn btn-outline-danger" type="button">Remove All</button>
+      </div>
+    </section>
+
+    <!-- ── Inactive Courses Card ──────────────── -->
+    <section class="card" id="inactiveCoursesCard" style="display:none;">
+      <h2>Inactive courses</h2>
+      <p class="hint" style="margin-bottom:12px;">Hidden or past courses from Moodle. Add ones you still want to sync — the ID dropdown suggests only hidden courses.</p>
+
+      <div id="inactiveCourseList"></div>
+
+      <div class="course-actions">
+        <button id="btnAddInactiveCourse" class="btn btn-outline" type="button">+ Add Course</button>
+        <button id="btnRemoveAllInactive" class="btn btn-outline-danger" type="button">Remove All</button>
+      </div>
+    </section>
+
+    <!-- ── Advanced Card ──────────────────────── -->
+    <details class="card" id="advancedCard" style="display:none;">
+      <summary><h2 style="display:inline;">Fine-tuning</h2></summary>
+
+      <div class="advanced-grid">
+        <label for="mergeThreshold">Merge threshold</label>
+        <input type="number" id="mergeThreshold" min="2" max="20" value="2" dir="ltr">
+
+        <label for="delayBetweenFetches">Fetch delay (ms)</label>
+        <input type="number" id="delayBetweenFetches" min="50" max="2000" value="200" dir="ltr">
+
+        <label for="batchPause">Batch pause (ms)</label>
+        <input type="number" id="batchPause" min="100" max="5000" value="500" dir="ltr">
+
+        <label for="silentSkipTypes">Skip types</label>
+        <input type="text" id="silentSkipTypes" placeholder="label, page, zoom, lti, forum, choicegroup" dir="ltr">
+        <p class="hint">Module types to ignore during sync</p>
+      </div>
+    </details>
+
+    <!-- ── Save Bar ───────────────────────────── -->
+    <div class="save-bar">
+      <button id="btnSave" class="btn btn-large clean" type="button">Save</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -12,3 +12,6 @@ moodle_sync_config.json
 
 # Downloaded course folders (this repo is just the engine, not the content)
 שנה*/
+
+# Distributable build artifact (regenerated from the extension folder)
+moodle-scraper-v*.zip

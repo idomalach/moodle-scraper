@@ -1,0 +1,576 @@
+/* Options Page — Moodle Sync Extension v3 Redesign */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+  background: #f2f2f7;
+  direction: ltr;
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 16px 100px;
+}
+
+/* ── Header ──────────────────────────────── */
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.header-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+}
+
+.page-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: #888;
+  margin-top: 2px;
+}
+
+/* ── Cards ───────────────────────────────── */
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.card-title-row:has(+ .edit-fields.visible) {
+  margin-bottom: 14px;
+}
+
+.card > h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.card-title-row h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  flex-shrink: 0;
+  line-height: 1;
+  color: #888;
+}
+
+/* ── Edit / Done toggle link ─────────────── */
+.btn-edit {
+  background: none;
+  border: none;
+  color: #007aff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.btn-edit:hover {
+  background: rgba(0,122,255,0.08);
+}
+
+/* ── Locked display ──────────────────────── */
+.locked-display {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+  flex: 1;
+  text-align: center;
+  line-height: 1;
+}
+
+.edit-fields {
+  display: none;
+}
+
+.edit-fields.visible {
+  display: block;
+}
+
+/* ── Onboarding ──────────────────────────── */
+.onboarding {
+  text-align: center;
+  padding: 32px 20px;
+}
+
+.onboarding-illustration {
+  margin-bottom: 20px;
+}
+
+.onboarding h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.onboarding p {
+  font-size: 14px;
+  color: #888;
+  margin-bottom: 24px;
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+  max-width: 380px;
+  margin: 0 auto;
+}
+
+.onboarding-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #f9f9fb;
+  border-radius: 10px;
+}
+
+.step-number {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #007aff;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.step-text {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.4;
+  padding-top: 3px;
+}
+
+/* ── Form elements ───────────────────────── */
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+  margin-top: 12px;
+  text-align: left;
+}
+
+label:first-of-type {
+  margin-top: 0;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="number"],
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fafafa;
+  transition: border-color 0.15s;
+}
+
+input:focus, select:focus {
+  outline: none;
+  border-color: #007aff;
+  background: #fff;
+}
+
+.hint {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+/* ── Advanced (collapsible) ──────────────── */
+details.card summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.card summary::-webkit-details-marker { display: none; }
+details.card summary::before {
+  content: '▸ ';
+  font-size: 12px;
+  margin-right: 6px;
+}
+details.card[open] summary::before { content: '▾ '; }
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.advanced-grid label {
+  margin-top: 0;
+}
+
+.advanced-grid input {
+  width: 100%;
+}
+
+.advanced-grid .hint {
+  grid-column: 1 / -1;
+}
+
+/* ── Course List ─────────────────────────── */
+.course-header {
+  display: grid;
+  grid-template-columns: 36px 1fr 1fr 80px 44px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #999;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 2px;
+}
+
+.course-row {
+  display: grid;
+  grid-template-columns: 36px 1fr 1fr 80px 44px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  transition: opacity 0.2s;
+}
+
+.course-row.disabled {
+  opacity: 0.45;
+}
+
+.course-row input {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.course-row input.course-moodle-name {
+  color: #888;
+  background: #f5f5f5;
+  border-color: #eee;
+}
+
+.course-row input.course-id {
+  text-align: center;
+}
+
+/* ── Toggle switch ───────────────────────── */
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: #ccc;
+  border-radius: 24px;
+  transition: background 0.2s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: #34c759;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+}
+
+/* ── Remove button ───────────────────────── */
+.course-row .btn-remove {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: #fee;
+  color: #e33;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.course-row .btn-remove:hover {
+  background: #fcc;
+}
+
+/* ── Course action buttons row ───────────── */
+.course-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* ── Course dropdown ─────────────────────── */
+.course-dropdown {
+  position: absolute;
+  z-index: 500;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+  max-height: 240px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.course-dropdown .dd-search {
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  width: 100%;
+  background: #fafafa;
+}
+
+.course-dropdown .dd-list {
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+.course-dropdown .dd-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+  gap: 8px;
+}
+
+.course-dropdown .dd-item:hover {
+  background: #f0f4ff;
+}
+
+.course-dropdown .dd-item .dd-name {
+  direction: rtl;
+  text-align: right;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.course-dropdown .dd-item .dd-id {
+  color: #999;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.course-dropdown .dd-empty {
+  padding: 12px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
+}
+
+.course-dropdown .dd-section-header {
+  padding: 6px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-top: 1px solid #eee;
+}
+
+.course-dropdown .dd-section-header:first-child {
+  border-top: none;
+}
+
+/* ── Not-recognized hint ─────────────────── */
+.not-recognized {
+  font-size: 11px;
+  color: #ff9500;
+  margin-top: 2px;
+  grid-column: 2 / 5;
+}
+
+/* ── Buttons ─────────────────────────────── */
+.btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.2s;
+  font-family: inherit;
+}
+
+.btn:hover { opacity: 0.85; }
+
+.btn-primary {
+  background: #007aff;
+  color: #fff;
+}
+
+.btn-outline {
+  background: #fff;
+  color: #007aff;
+  border: 1px solid #007aff;
+}
+
+.btn-outline-danger {
+  background: #fff;
+  color: #e33;
+  border: 1px solid #e33;
+}
+
+.btn-outline-danger:hover {
+  background: #fff5f5;
+}
+
+.btn-large {
+  padding: 14px 24px;
+  font-size: 16px;
+  width: 100%;
+}
+
+/* ── Folder Picker ──────────────────────── */
+.folder-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.folder-status {
+  font-size: 13px;
+  color: #888;
+}
+
+.folder-status.folder-selected {
+  color: #2E7D32;
+  font-weight: 600;
+}
+
+/* ── Save Bar ────────────────────────────── */
+.save-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 16px;
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(10px);
+  border-top: 1px solid #eee;
+  z-index: 100;
+}
+
+.save-bar .btn {
+  max-width: 640px;
+  margin: 0 auto;
+  display: block;
+}
+
+.save-bar .btn.dirty {
+  background: #007aff;
+  color: #fff;
+}
+
+.save-bar .btn.clean {
+  background: #ccc;
+  color: #fff;
+}
+
+/* ── Toast ───────────────────────────────── */
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-80px);
+  padding: 12px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: #34c759;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  opacity: 0;
+  transition: transform 0.3s, opacity 0.3s;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.toast.error {
+  background: #ff3b30;
+}

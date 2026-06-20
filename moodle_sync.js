@@ -1,19 +1,19 @@
 /**
- * BGU Moodle Sync Engine v2.6 (safety patches S1–S11, update/removal detection, incremental Excel merge, download retry, progress bar, desktop notifications)
+ * Moodle Sync Engine v3.0 (generalized, floating toast UI, REST API, parameterized login detection, basePath support)
  *
  * Unified engine for both seed runs and incremental syncs.
- * Inject this into any Moodle tab, click the button, and it handles everything.
+ * Inject this into any Moodle tab and control via REST API or directly.
  *
- * Usage: Paste into Chrome DevTools console on any moodle.bgu.ac.il page,
+ * Usage: Paste into Chrome DevTools console on any Moodle page,
  *        or inject via Claude in Chrome's javascript_tool.
- *        Then click "Seed Run (Full)" or "Incremental Sync".
+ *        Call window.__MOODLE_SYNC_API__.startSync('seed') or 'incremental'.
  *
  * Configuration is loaded from moodle_sync_config.json (same folder as
  * this script). To change courses, semester, or paths — edit that file,
  * not this one. The engine is course-agnostic.
  *
- * If no config file is available (e.g. first-time use or friend sharing),
- * the engine shows a setup form where you enter courses manually.
+ * Configuration is handled by the extension options page. The engine
+ * exposes a REST-like API at window.__MOODLE_SYNC_API__ for programmatic control.
  */
 
 (function () {
@@ -26,9 +26,12 @@
   // Defaults — overridden by moodle_sync_config.json if present
   let CONFIG = {
     baseUrl: 'https://moodle.bgu.ac.il',
-    semesterCheck: '',      // e.g. 'סמ 2' — set via config
+    basePath: '/moodle/',   // e.g. '/moodle/' for BGU, '/2025-26/' for HUJI
+    semesterCheck: '',      // e.g. 'סמ 2' — set via config (comma-separated for alternatives)
     rootPath: '',           // e.g. 'סמסטר ב׳' — set via config (relative to the folder picked in the directory picker)
     courses: [],            // populated from config or setup form
+    loginSelectors: ['a[href*="login/index.php"]', 'a.btn-login', 'a[data-title="login,moodle"]'],  // CSS selectors for login button
+    loginTextMatches: ['התחברות', 'Log in', 'כניסה', 'Sign in'],  // text to match in links
     silentSkipTypes: ['label', 'page', 'zoom', 'lti', 'forum', 'choicegroup'],
     mergeThreshold: 3,
     delayBetweenFetches: 200,
@@ -50,8 +53,28 @@
       return true;
     }
 
-    // Option 2: Config loaded alongside the script via the semester folder
-    // (The setup form will set this if the user fills it in)
+    // Option 1.5: Config from DOM bridge (set by Chrome extension content script — CSP-safe)
+    const bridgeEl = document.getElementById('moodle-sync-bridge');
+    if (bridgeEl) {
+      const bridgeConfig = bridgeEl.getAttribute('data-config');
+      if (bridgeConfig) {
+        try {
+          Object.assign(CONFIG, JSON.parse(bridgeConfig));
+          log('Config loaded from DOM bridge (extension content script)');
+          // Also read lib base and icon from bridge
+          const libBase = bridgeEl.getAttribute('data-lib-base');
+          if (libBase) window.__MOODLE_SYNC_LIB_BASE__ = libBase;
+          const iconUrl = bridgeEl.getAttribute('data-icon');
+          if (iconUrl) window.__MOODLE_SYNC_ICON__ = iconUrl;
+          // S6 — Backup config to IndexedDB
+          try { await idbSet('config', CONFIG); } catch {}
+          return true;
+        } catch (e) {
+          console.warn('[MoodleSync] Failed to parse DOM bridge config:', e);
+          /* fall through */
+        }
+      }
+    }
 
     // S6 — Fallback: try IndexedDB config backup
     try {
@@ -89,6 +112,12 @@
     results: { downloaded: 0, failed: 0, skipped: 0, newItems: 0, updated: 0 },
     log: [],
     running: false,
+    toastEl: null,        // floating toast UI element
+    // Progress tracking
+    progressPercent: 0,
+    progressStep: '',     // e.g. 'Scraping courses...', 'Downloading 5/20...'
+    totalDownloads: 0,
+    completedDownloads: 0,
   };
 
   // ============================================================
@@ -115,10 +144,26 @@
   }
 
   async function ensureSheetJS() {
+    if (window.XLSX) return window.XLSX;
+    const extBase = window.__MOODLE_SYNC_LIB_BASE__;
+    if (extBase) {
+      try {
+        await loadCdnLibrary('SheetJS', extBase + 'lib/xlsx.full.min.js', 'XLSX');
+        if (window.XLSX) return window.XLSX;
+      } catch (e) { /* fall through to CDN */ }
+    }
     return loadCdnLibrary('SheetJS', 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js', 'XLSX');
   }
 
   async function ensureJSZip() {
+    if (window.JSZip) return window.JSZip;
+    const extBase = window.__MOODLE_SYNC_LIB_BASE__;
+    if (extBase) {
+      try {
+        await loadCdnLibrary('JSZip', extBase + 'lib/jszip.min.js', 'JSZip');
+        if (window.JSZip) return window.JSZip;
+      } catch (e) { /* fall through to CDN */ }
+    }
     return loadCdnLibrary('JSZip', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'JSZip');
   }
 
@@ -127,9 +172,20 @@
   // ============================================================
 
   function log(msg) {
-    state.log.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+    const timestamp = `[${new Date().toLocaleTimeString()}]`;
+    state.log.push(`${timestamp} ${msg}`);
     console.log(`[MoodleSync] ${msg}`);
-    updateUI();
+    // Update toast if running
+    if (state.running && state.toastEl) {
+      const toastText = state.toastEl.querySelector('#moodle-sync-toast-text');
+      if (toastText) {
+        toastText.textContent = msg;
+      }
+    }
+    // Update DOM bridge status (for extension popup)
+    if (typeof updateBridgeStatus === 'function') {
+      try { updateBridgeStatus(); } catch {}
+    }
   }
 
   function delay(ms) {
@@ -195,6 +251,168 @@
     return n.includes('סילבוס') || n.includes('סיליבוס') || n.includes('syllabus');
   }
 
+  /** Check if a name/section relates to exams */
+  function isExamRelated(name) {
+    const n = (name || '').trim();
+    return /מבחנ|בחינ|מועד|exam/i.test(n);
+  }
+
+  /**
+   * Hebrew academic year to Gregorian mapping.
+   * תשפ"א = 5781 → 2020-2021, etc.
+   */
+  function hebrewYearToGregorian(hebrewYear) {
+    const cleaned = hebrewYear.replace(/[""״׳']/g, '');
+    // Map Hebrew letters to numeric values
+    const vals = { 'א':1,'ב':2,'ג':3,'ד':4,'ה':5,'ו':6,'ז':7,'ח':8,'ט':9 };
+    // Common academic years: תשפא..תשפט, תשצא..
+    // "תשפ" prefix = 5780, last letter is units
+    const lastChar = cleaned.slice(-1);
+    if (vals[lastChar] !== undefined) {
+      const base = cleaned.startsWith('תשצ') ? 5790 : cleaned.startsWith('תשפ') ? 5780 : 0;
+      if (base) {
+        const hebrewNumeric = base + vals[lastChar];
+        return hebrewNumeric - 3760; // Convert to Gregorian (start year of academic year)
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Normalize moed letter to Hebrew א/ב/ג.
+   */
+  function normalizeMoed(raw) {
+    if (!raw) return null;
+    const c = raw.trim().toUpperCase();
+    const map = { 'A':'א', 'B':'ב', 'C':'ג', 'D':'ד', '1':'א', '2':'ב', '3':'ג',
+                  'א':'א', 'ב':'ב', 'ג':'ג', 'ד':'ד' };
+    return map[c] || null;
+  }
+
+  /**
+   * Normalize semester to Hebrew א/ב.
+   */
+  function normalizeSemester(raw) {
+    if (!raw) return null;
+    const c = raw.trim();
+    // Hebrew: א / ב / a / b / 1 / 2
+    const map = { 'א':'א', 'ב':'ב', 'a':'א', 'b':'ב', 'A':'א', 'B':'ב', '1':'א', '2':'ב' };
+    return map[c] || null;
+  }
+
+  /**
+   * Extract the full exam identity from a filename or title.
+   * Tries to find year, semester, and moed to build a unique subfolder name.
+   * Returns a folder name string like "2024 סמסטר א מועד א", or null if
+   * insufficient info is found (falls back to generic exam folder).
+   *
+   * Supports patterns observed across Israeli Moodle instances:
+   *   - "מבחן ופתרון, מועד א' סמסטר א' 2020"
+   *   - "מבחן ופתרון-מועד א' סמסטר א' 2024"
+   *   - "מבחן + פתרון 2026 מועד א סמסטר א"
+   *   - "Final exam S12024"  (S = semester, 1 = sem number, 2024 = year)
+   *   - "מועדי א/ב תשפד"   (Hebrew academic year)
+   *   - "2024A" / "2024B"   (compact year+moed)
+   *   - "מועד א 2023"       (moed + year, no semester)
+   *   - "מבחן סמסטר ב 2022 מועד ב"
+   */
+  function extractExamIdentity(name) {
+    const n = (name || '').trim();
+    if (!n) return null;
+
+    let year = null, semester = null, moed = null;
+
+    // ── Extract year ──────────────────────────────────────────
+    // Gregorian year: 2018-2029
+    const yearMatch = n.match(/(20[12]\d)/);
+    if (yearMatch) year = yearMatch[1];
+
+    // Hebrew academic year: תשפ"ד, תשפד, תשצ"א, etc.
+    if (!year) {
+      const hebrewYearMatch = n.match(/תש[פצ][""״׳']?[אבגדהוזחט]/);
+      if (hebrewYearMatch) {
+        const greg = hebrewYearToGregorian(hebrewYearMatch[0]);
+        if (greg) year = String(greg);
+      }
+    }
+
+    // ── Extract semester ──────────────────────────────────────
+    // "סמסטר א'" / "סמסטר ב'" / "סמסטר א" / "סמ א" / "סמ 2"
+    const semMatch = n.match(/סמ(?:סטר)?\s*['׳]?([אב12])['׳]?/);
+    if (semMatch) semester = normalizeSemester(semMatch[1]);
+
+    // English compact: S12024, S22023 — semester + year
+    if (!semester) {
+      const sCompact = n.match(/S([12])(20[12]\d)/i);
+      if (sCompact) {
+        semester = normalizeSemester(sCompact[1]);
+        if (!year) year = sCompact[2];
+      }
+    }
+
+    // ── Extract moed ──────────────────────────────────────────
+    // "מועד א'" / "מועד ב" / "מועד מיוחד" / "מועד חוזר"
+    const moedHeb = n.match(/מועד\s*['׳]?([אבגדA-Da-d])['׳]?/);
+    if (moedHeb) moed = normalizeMoed(moedHeb[1]);
+
+    // "מועד מיוחד" / "מועד חוזר" — special moeds
+    if (!moed) {
+      if (/מועד\s*מיוחד/.test(n)) moed = 'מיוחד';
+      if (/מועד\s*חוזר/.test(n)) moed = 'חוזר';
+    }
+
+    // "מועד 1" / "מועד 2"
+    if (!moed) {
+      const moedNum = n.match(/מועד\s*(\d)/);
+      if (moedNum) moed = normalizeMoed(moedNum[1]);
+    }
+
+    // English: "Moed A" / "Moed B"
+    if (!moed) {
+      const moedEng = n.match(/moed\s*([A-Da-d])/i);
+      if (moedEng) moed = normalizeMoed(moedEng[1]);
+    }
+
+    // Compact year+moed: "2024A" / "2024B" (only if not already parsed)
+    if (!moed) {
+      const compact = n.match(/(20[12]\d)\s*([ABab])(?:\s|$|[^a-zA-Z])/);
+      if (compact) {
+        moed = normalizeMoed(compact[2]);
+        if (!year) year = compact[1];
+      }
+    }
+
+    // ── Build subfolder name ──────────────────────────────────
+    // Need at least year + moed to create a meaningful subfolder.
+    // If we only have moed (no year), we can't distinguish exams → return null → generic folder.
+    if (!year && !moed) return null;
+
+    // If we have year but no moed, still create a year-based folder (e.g. "2024")
+    // This handles cases like "Final exam S12024" where moed isn't specified
+    let folderName = '';
+    if (year) folderName += year;
+    if (semester) folderName += ` סמסטר ${semester}`;
+    if (moed) {
+      if (moed === 'מיוחד' || moed === 'חוזר') {
+        folderName += ` מועד ${moed}`;
+      } else {
+        folderName += ` מועד ${moed}`;
+      }
+    }
+
+    return folderName.trim() || null;
+  }
+
+  /**
+   * Legacy wrapper — extract just the moed letter for backwards compatibility.
+   * Used only where the full identity isn't needed.
+   */
+  function extractMoed(name) {
+    const identity = extractExamIdentity(name);
+    // For legacy callers, return the identity string (or null)
+    return identity;
+  }
+
   /** Generate a unique manifest key for an item */
   function manifestKey(item) {
     // mod/folder children share a cmid — use cmid:childName for uniqueness
@@ -202,6 +420,62 @@
       return `${item.parentCmid}:${item.name}`;
     }
     return item.cmid;
+  }
+
+  /**
+   * Has this cmid already been seen in a prior sync — either downloaded OR
+   * recorded as skipped/failed? Checks both the direct cmid key and any
+   * child keys (`cmid:childName`). Used in incremental mode to avoid
+   * re-resolving items we already handled (especially slow cross-origin
+   * mod/url targets like Colab, external sites, and the BGU syllabus portal,
+   * which fail every run and otherwise make incremental syncs crawl).
+   */
+  function isKnownInManifest(courseId, cmid) {
+    const cm = state.manifest[courseId];
+    if (!cm || !cm.items) return false;
+    if (cm.items[cmid]) return true;
+    const prefix = `${cmid}:`;
+    return Object.keys(cm.items).some(k => k.startsWith(prefix));
+  }
+
+  /**
+   * Fetch a CROSS-ORIGIN URL (e.g. the BGU bgu4u syllabus portal) via the
+   * extension background service worker. The engine runs in the page main
+   * world where such a fetch is CORS-blocked; the background worker (granted
+   * host_permissions) can fetch it with the user's session and bypass CORS.
+   * We message it through the content-script relay (window.postMessage bridge),
+   * which returns the bytes base64-encoded. Returns { ok, blob, contentType }.
+   */
+  function crossOriginFetchBlob(url) {
+    return new Promise((resolve) => {
+      const id = 'xf_' + Date.now() + '_' + Math.floor(Math.random() * 1e9);
+      let done = false;
+      function onMsg(e) {
+        if (e.source !== window) return;
+        const d = e.data;
+        if (!d || !d.__moodleSyncXFetchResult || d.id !== id) return;
+        done = true;
+        window.removeEventListener('message', onMsg);
+        const r = d.result || {};
+        if (r.ok && typeof r.dataB64 === 'string') {
+          try {
+            const bytes = Uint8Array.from(atob(r.dataB64), c => c.charCodeAt(0));
+            resolve({ ok: true, blob: new Blob([bytes], { type: r.contentType || '' }), contentType: r.contentType || '' });
+          } catch (err) {
+            resolve({ ok: false, error: 'decode failed: ' + err.message });
+          }
+        } else {
+          resolve({ ok: false, error: r.error || 'cross-origin fetch failed' });
+        }
+      }
+      window.addEventListener('message', onMsg);
+      window.postMessage({ __moodleSyncXFetch: true, id, url }, '*');
+      setTimeout(() => {
+        if (done) return;
+        window.removeEventListener('message', onMsg);
+        resolve({ ok: false, error: 'cross-origin fetch timeout (is the extension background worker active?)' });
+      }, 30000);
+    });
   }
 
   // ============================================================
@@ -219,13 +493,14 @@
   /** Scrape all sections and items from a course page */
   async function scrapeCourse(courseId, folderName) {
     log(`Scraping course ${folderName} (${courseId})...`);
-    const url = `${CONFIG.baseUrl}/moodle/course/view.php?id=${courseId}`;
+    const url = `${CONFIG.baseUrl}${CONFIG.basePath}course/view.php?id=${courseId}`;
     const doc = await fetchMoodlePage(url);
 
-    // Verify semester
+    // Verify semester (support comma-separated alternatives)
     const title = doc.title || '';
-    if (!title.includes(CONFIG.semesterCheck)) {
-      log(`  WARNING: title doesn't contain "${CONFIG.semesterCheck}": ${title}`);
+    const checks = CONFIG.semesterCheck ? CONFIG.semesterCheck.split(',').map(s => s.trim()) : [];
+    if (checks.length > 0 && !checks.some(check => title.includes(check))) {
+      log(`  WARNING: title doesn't match any of [${checks.join(', ')}]: ${title}`);
     }
 
     const sections = doc.querySelectorAll('li.section.main');
@@ -284,6 +559,12 @@
       }
     }
 
+    // Mark items in "assignment sections" — any section that contains a
+    // submission box (mod/assign). Their question files get grouped under a
+    // "תרגילים" subfolder so the section holds only תרגילים / הגשות / פתרונות מרצה.
+    const assignSecs = new Set(items.filter(i => i.type === 'assign').map(i => i.section));
+    for (const it of items) it.inAssignSection = assignSecs.has(it.section);
+
     log(`  Found ${items.length} items in ${sectionNames.length} sections`);
     return { items, sectionNames };
   }
@@ -328,7 +609,7 @@
         );
         if (parentSection && parentSection.name !== s.name) {
           const parentFolder = mapping[parentSection.name]?.folder || parentSection.name;
-          mapping[s.name] = { folder: `${parentFolder}/פתרונות`, isMerged: false, mergedInto: parentFolder };
+          mapping[s.name] = { folder: `${parentFolder}/פתרונות מרצה`, isMerged: false, mergedInto: parentFolder };
         } else {
           mapping[s.name] = { folder: s.name, isMerged: false };
         }
@@ -354,8 +635,29 @@
 
     let folder = mapEntry.folder;
 
-    if (isSolutionFile(item.name) && !folder.includes('פתרונות')) {
-      folder = `${folder}/פתרונות`;
+    // Exam organization: each exam gets its own subfolder by identity (year+semester+moed)
+    // e.g. "מבחנים/2024 סמסטר א מועד א/exam.pdf" and "מבחנים/2024 סמסטר א מועד א/solution.pdf"
+    if (isExamRelated(item.section) || isExamRelated(item.name)) {
+      const identity = extractExamIdentity(item.name) || extractExamIdentity(item.section);
+      if (identity) {
+        folder = `${folder}/${identity}`;
+        return folder; // test + solution go together in the identity folder
+      }
+      // No identity extracted — fall back to generic exam folder (no subfolder)
+      return folder;
+    }
+
+    // Lecturer solution files → "פתרונות מרצה" subfolder
+    if (isSolutionFile(item.name)) {
+      return folder.includes('פתרונות מרצה') ? folder : `${folder}/פתרונות מרצה`;
+    }
+
+    // Assignment sections (those with a submission box): group the loose
+    // question files under "תרגילים", so the section holds only תרגילים /
+    // הגשות / פתרונות מרצה. mod/folder items keep their own named subfolder
+    // (so we don't get תרגילים/תרגילים). Other sections are unchanged.
+    if (item.inAssignSection && item.type !== 'folder') {
+      return `${folder}/תרגילים`;
     }
 
     return folder;
@@ -428,7 +730,7 @@
 
   async function expandModFolder(item) {
     try {
-      const url = item.url || `${CONFIG.baseUrl}/moodle/mod/folder/view.php?id=${item.cmid}`;
+      const url = item.url || `${CONFIG.baseUrl}${CONFIG.basePath}mod/folder/view.php?id=${item.cmid}`;
       const doc = await fetchMoodlePage(url);
       const links = doc.querySelectorAll('.fp-filename-icon a');
       const children = [];
@@ -446,12 +748,23 @@
 
   async function checkAssignPatternB(item) {
     try {
-      const url = item.url || `${CONFIG.baseUrl}/moodle/mod/assign/view.php?id=${item.cmid}`;
+      const url = item.url || `${CONFIG.baseUrl}${CONFIG.basePath}mod/assign/view.php?id=${item.cmid}`;
       const doc = await fetchMoodlePage(url);
       const pluginLinks = doc.querySelectorAll('a[href*="pluginfile.php"]');
       const files = [];
       for (const link of pluginLinks) {
-        files.push({ name: link.textContent.trim() || 'assignment_file', url: link.href, direct: true });
+        // Classify by the pluginfile component (the segment after the contextid):
+        //   assignsubmission_file → the student's own uploaded submission
+        //   mod_assign (intro / introattachment) → the assignment brief/question
+        const m = link.href.match(/pluginfile\.php\/\d+\/([^\/]+)\//);
+        const component = m ? m[1] : '';
+        const isSubmission = /assignsubmission/.test(component);
+        files.push({
+          name: link.textContent.trim() || (isSubmission ? 'submission_file' : 'assignment_file'),
+          url: link.href,
+          direct: true,
+          isSubmission,
+        });
       }
       return files;
     } catch (e) {
@@ -602,9 +915,29 @@
   // FILE DOWNLOAD & SAVE
   // ============================================================
 
+  /**
+   * Sanitize a single path segment (folder name) so it's accepted by the
+   * File System Access API on a *native* filesystem. Chrome rejects names
+   * containing < > : " / \ | ? * (Windows-reserved set) for local handles —
+   * even on macOS/OPFS where they'd otherwise be legal. Course folder names
+   * and section names can contain these (e.g. the " in `תעו"נ`), so every
+   * segment must be cleaned before getDirectoryHandle, or the whole run throws.
+   */
+  function sanitizeSegment(seg) {
+    if (!seg) return '';
+    let s = seg
+      .replace(/[‏‎​‌‍؜﻿]/g, '') // invisible Unicode
+      .replace(/[\\:*?"<>|]/g, '-')   // illegal chars (/ already split out by caller)
+      .replace(/\s+/g, ' ')
+      .replace(/[ .]+$/g, '')          // Windows disallows trailing dots/spaces in dir names
+      .trim();
+    if (s.length > 80) s = s.substring(0, 80).trim();
+    return s;
+  }
+
   async function getNestedDir(rootHandle, path) {
     if (!path) return rootHandle;
-    const parts = path.split('/').filter(p => p.length > 0);
+    const parts = path.split('/').map(sanitizeSegment).filter(p => p.length > 0);
     let current = rootHandle;
     for (const part of parts) {
       current = await current.getDirectoryHandle(part, { create: true });
@@ -641,7 +974,7 @@
   async function downloadAndSave(item, courseHandle, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const result = await _downloadAndSaveOnce(item, courseHandle);
-      if (result.success || attempt === maxRetries) return result;
+      if (result.success || result.skippedHtml || attempt === maxRetries) return result;
       log(`  ⟳ Retry ${attempt}/${maxRetries - 1} for ${item.name} (${result.error})`);
       await delay(1000 * attempt); // 1s, 2s, 3s backoff
     }
@@ -650,20 +983,64 @@
   async function _downloadAndSaveOnce(item, courseHandle) {
     const fetchUrl = item.fetchUrl || (item.direct
       ? item.url
-      : `${CONFIG.baseUrl}/moodle/mod/resource/view.php?id=${item.cmid}`);
+      : `${CONFIG.baseUrl}${CONFIG.basePath}mod/resource/view.php?id=${item.cmid}`);
 
     try {
-      const fetchOpts = { redirect: 'follow' };
-
-      // Google exports: absolute URL, NO credentials (CORS fix for cross-origin redirect)
-      if (item.googleExport) {
-        // No credentials — Google rejects cross-origin requests with cookies
+      let resp;
+      if (item.crossOrigin) {
+        // Cross-origin (e.g. the BGU bgu4u syllabus portal). A page-context
+        // fetch is CORS-blocked, so the extension background worker fetches it
+        // with the user's session and returns the bytes (see content.js relay).
+        const r = await crossOriginFetchBlob(fetchUrl);
+        if (!r.ok) throw new Error(r.error || 'cross-origin fetch failed');
+        const ct = r.contentType || '';
+        if (ct.includes('text/html')) {
+          // Got a portal/wrapper page, not the actual file.
+          return { success: false, error: 'BGU internal page — no direct file (open manually)', skippedHtml: true };
+        }
+        const cblob = r.blob;
+        resp = {
+          ok: true,
+          url: fetchUrl,
+          headers: { get: (h) => (h && h.toLowerCase() === 'content-type') ? ct : null },
+          blob: async () => cblob,
+        };
       } else {
-        fetchOpts.credentials = 'include';
+        const fetchOpts = { redirect: 'follow' };
+        // Google exports: absolute URL, NO credentials (CORS fix for cross-origin redirect)
+        if (item.googleExport) {
+          // No credentials — Google rejects cross-origin requests with cookies
+        } else {
+          fetchOpts.credentials = 'include';
+        }
+        resp = await fetch(fetchUrl, fetchOpts);
       }
-
-      const resp = await fetch(fetchUrl, fetchOpts);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      // Skip HTML pages served from Moodle — these are redirect/wrapper pages
+      // (e.g. recording links, embedded viewers), not real downloadable files.
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        const finalUrl = resp.url || fetchUrl;
+        try {
+          const u = new URL(finalUrl);
+          const moodleHost = new URL(CONFIG.baseUrl).hostname;
+          if (u.hostname === moodleHost) {
+            // Distinguish a genuine access restriction (group/role/date-locked
+            // resource the user can't see) from a generic redirect/wrapper page,
+            // so the skip report tells the user *why* it's missing.
+            let reason = 'Moodle HTML page — not a downloadable file';
+            try {
+              const html = await resp.text();
+              if (/availabilityinfo|isrestricted|זמין רק למי|לא זמין|Not available|access is restricted/i.test(html)) {
+                reason = 'access restricted — not available to you (group/role restriction)';
+              }
+            } catch (e) { /* couldn't read body — keep generic reason */ }
+            log(`  ⏭ Skipping "${item.name}" — ${reason}`);
+            return { success: false, error: reason, skippedHtml: true };
+          }
+        } catch (e) { /* URL parse failed — continue with download */ }
+      }
 
       const blob = await resp.blob();
       const ext = detectExtension(resp, item.name);
@@ -849,12 +1226,25 @@
       log('  Skipping filesystem manifest read (health check failed) — going straight to IndexedDB');
     }
 
-    // S2 — Fallback: try IndexedDB backup
+    // S2 — Fallback: try IndexedDB backup (only if it matches the current folder)
     log('  Filesystem manifest empty or missing — trying IndexedDB backup...');
     const backup = await idbGet('manifest');
     if (backup && Object.keys(backup).length > 0) {
-      log('  Manifest restored from IndexedDB backup');
-      return backup;
+      // Check if the backup belongs to the current folder
+      const backupFolder = await idbGet('manifestFolderName');
+      const currentFolder = state.rootHandle ? state.rootHandle.name : '';
+      if (!backupFolder) {
+        // No folder tag (legacy backup from before this check existed).
+        // The filesystem manifest was already empty/missing — this backup
+        // is very likely from a DIFFERENT folder. Don't trust it.
+        log(`  IndexedDB manifest has no folder tag — filesystem was empty, so ignoring potentially stale backup`);
+        log(`  (If this is wrong, run a Seed sync to re-download and tag the backup.)`);
+      } else if (currentFolder && backupFolder !== currentFolder) {
+        log(`  IndexedDB manifest belongs to "${backupFolder}", not current folder "${currentFolder}" — ignoring stale backup`);
+      } else {
+        log('  Manifest restored from IndexedDB backup');
+        return backup;
+      }
     }
 
     log('  No manifest found in filesystem or IndexedDB');
@@ -864,6 +1254,10 @@
   async function saveManifest(semesterHandle, manifest) {
     // S10 — Save to IndexedDB FIRST (atomic, survives interruption)
     await idbSet('manifest', manifest);
+    // Tag the backup with the folder name so we can detect stale backups on folder switch
+    if (state.rootHandle) {
+      await idbSet('manifestFolderName', state.rootHandle.name);
+    }
     log('  Manifest saved to IndexedDB backup');
 
     // Then save to filesystem (may be interrupted by tab close / FUSE issues)
@@ -879,137 +1273,281 @@
   }
 
   // ============================================================
-  // EXCEL GENERATION — skipped/failed items log
+  // EXCEL STYLING HELPERS
   // ============================================================
 
-  async function generateExcel(semesterHandle, skipQueue) {
+  const XLS_BORDER_THIN = { style: 'thin', color: { rgb: '999999' } };
+  const XLS_BORDER = { top: XLS_BORDER_THIN, bottom: XLS_BORDER_THIN, left: XLS_BORDER_THIN, right: XLS_BORDER_THIN };
+  const XLS_HEADER_STYLE = {
+    font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } },
+    fill: { fgColor: { rgb: '4472C4' } },
+    alignment: { horizontal: 'right', vertical: 'center', wrapText: false },
+    border: XLS_BORDER,
+  };
+  const XLS_CELL_STYLE = {
+    font: { sz: 11 },
+    alignment: { horizontal: 'right', vertical: 'center', wrapText: false },
+    border: XLS_BORDER,
+  };
+  const XLS_TITLE_STYLE = {
+    font: { bold: true, sz: 13 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  };
+
+  /**
+   * Apply styling to a worksheet that has a title row (row 0, merged)
+   * followed by a header row (row 1) and data rows (row 2+).
+   * @param {object} ws - SheetJS worksheet
+   * @param {number} numCols - number of columns
+   * @param {boolean} hasHeaders - true if row 1 is a header row (false for success-only sheets)
+   */
+  function styleWorksheet(ws, numCols, hasHeaders) {
+    const XL = window.XLSX;
+    const range = XL.utils.decode_range(ws['!ref'] || 'A1');
+    const colLetters = [];
+    for (let c = 0; c < numCols; c++) colLetters.push(XL.utils.encode_col(c));
+
+    // Style title row (row 0)
+    const titleRef = colLetters[0] + '1';
+    if (ws[titleRef]) ws[titleRef].s = XLS_TITLE_STYLE;
+
+    if (hasHeaders) {
+      // Style header row (row 1 → Excel row 2)
+      for (const col of colLetters) {
+        const ref = col + '2';
+        if (ws[ref]) ws[ref].s = XLS_HEADER_STYLE;
+      }
+      // Style data rows (row 2+ → Excel row 3+)
+      for (let r = 2; r <= range.e.r; r++) {
+        for (const col of colLetters) {
+          const ref = col + (r + 1);
+          if (ws[ref]) ws[ref].s = XLS_CELL_STYLE;
+        }
+      }
+    } else {
+      // Style the single content row (row 1 → Excel row 2)
+      for (const col of colLetters) {
+        const ref = col + '2';
+        if (ws[ref]) ws[ref].s = { ...XLS_CELL_STYLE, font: { bold: true, sz: 12 } };
+      }
+    }
+  }
+
+  /**
+   * Post-process an XLSX buffer to add RTL sheet direction.
+   * Uses JSZip to patch the sheet XML with rightToLeft="1".
+   * @param {Uint8Array} xlsxData - raw XLSX as array
+   * @returns {Promise<Uint8Array>} patched XLSX data
+   */
+  async function patchXlsxRtl(xlsxData) {
+    try {
+      const JSZip = await ensureJSZip();
+      if (!JSZip) { log('  ⚠️ JSZip not available — skipping RTL patch'); return xlsxData; }
+      const zip = await JSZip.loadAsync(xlsxData);
+
+      // Patch all sheet files (sheet1.xml, sheet2.xml, etc.)
+      const sheetFiles = zip.file(/^xl\/worksheets\/sheet\d+\.xml$/);
+      if (sheetFiles.length === 0) return xlsxData;
+
+      let patched = false;
+      for (const sheetFile of sheetFiles) {
+        let xml = await sheetFile.async('string');
+        if (xml.includes('rightToLeft')) continue; // already RTL
+
+        if (xml.includes('<sheetView')) {
+          // Add rightToLeft="1" to existing <sheetView> tag
+          // Handles: <sheetView>, <sheetView/>, <sheetView ...>
+          xml = xml.replace(/<sheetView(?=[\s>\/])/g, '<sheetView rightToLeft="1"');
+          zip.file(sheetFile.name, xml);
+          patched = true;
+        } else if (xml.includes('<sheetViews')) {
+          // sheetViews exists but empty — inject a sheetView
+          xml = xml.replace('<sheetViews>', '<sheetViews><sheetView rightToLeft="1"/>');
+          xml = xml.replace('</sheetViews>', '</sheetViews>');
+          zip.file(sheetFile.name, xml);
+          patched = true;
+        } else {
+          // No sheetViews at all — inject before <sheetData> or <sheetFormatPr>
+          const insertBefore = xml.includes('<sheetFormatPr') ? '<sheetFormatPr' :
+                               xml.includes('<sheetData') ? '<sheetData' : null;
+          if (insertBefore) {
+            xml = xml.replace(insertBefore,
+              '<sheetViews><sheetView rightToLeft="1"/></sheetViews>' + insertBefore);
+            zip.file(sheetFile.name, xml);
+            patched = true;
+          }
+        }
+      }
+
+      if (patched) {
+        return await zip.generateAsync({ type: 'uint8array' });
+      }
+      return xlsxData;
+    } catch (e) {
+      log(`  ⚠️ RTL patch failed: ${e.message}`);
+      return xlsxData;
+    }
+  }
+
+  /**
+   * Write a styled XLSX blob to a file handle, with RTL patching.
+   */
+  async function writeStyledXlsx(dirHandle, fileName, wb) {
+    let xlsxData = window.XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    xlsxData = await patchXlsxRtl(xlsxData);
+    const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const fh = await dirHandle.getFileHandle(fileName, { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  }
+
+  // ============================================================
+  // PER-COURSE STATUS XLS GENERATION
+  // ============================================================
+
+  async function generateCourseStatus(courseHandle, courseName, courseManifest, courseSkipped) {
+    log(`  Generating status XLS for ${courseName}...`);
     try {
       const XLSX = await ensureSheetJS();
-
-      // Read existing Excel to preserve previous entries (incremental merge)
-      let existingRows = [];
-      try {
-        const fh = await semesterHandle.getFileHandle('קבצים שלא הורדו.xlsx');
-        const file = await fh.getFile();
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        if (ws) {
-          existingRows = XLSX.utils.sheet_to_json(ws);
-        }
-        log(`  Read ${existingRows.length} existing entries from Excel`);
-      } catch {
-        // No existing file — start fresh
-      }
-
-      const newRows = skipQueue.map(item => ({
-        'קורס': item.courseName || '',
-        'מיקום במוודל': item.section || '',
-        'שם': item.name || '',
-        'סוג': item.type || '',
-        'סיבה': item.reason || '',
-        'קישור': item.url || '',
-        'תאריך': new Date().toISOString().split('T')[0],
-      }));
-
-      // Dedup: use קישור+שם as unique key to avoid duplicate entries
-      const seen = new Set();
-      const merged = [];
-      for (const row of [...newRows, ...existingRows]) {
-        const key = `${row['קישור'] || ''}||${row['שם'] || ''}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          merged.push(row);
-        }
-      }
-
-      if (merged.length === 0) {
-        log('No skipped items — skipping Excel generation');
+      if (!XLSX || !XLSX.utils) {
+        log(`  ⚠️ SheetJS not available — cannot generate status XLS for ${courseName}`);
         return;
       }
+      log(`  SheetJS loaded OK (version: ${XLSX.version || 'unknown'})`);
 
-      const ws = XLSX.utils.json_to_sheet(merged);
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('he-IL', { year: 'numeric', month: '2-digit', day: '2-digit' });
+      const timeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
 
-      // Set column widths
+      // Build AOA (array of arrays) for the sheet
+      const aoa = [];
+      aoa.push([`עדכון אחרון: ${dateStr} ${timeStr}`]);
+
+      const skippedItems = courseSkipped || [];
+      const hasHeaders = skippedItems.length > 0;
+      if (hasHeaders) {
+        aoa.push(['קורס', 'מיקום במוודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
+        for (const item of skippedItems) {
+          aoa.push([
+            courseName,
+            item.section || '',
+            item.name || '',
+            item.url || '',
+            item.reason || '',
+            new Date().toISOString().split('T')[0],
+          ]);
+        }
+      } else {
+        aoa.push(['כל הקבצים הורדו בהצלחה.']);
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // Merge first row across all columns
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
       ws['!cols'] = [
         { wch: 18 }, // קורס
         { wch: 22 }, // מיקום במוודל
         { wch: 35 }, // שם
-        { wch: 12 }, // סוג
-        { wch: 30 }, // סיבה
         { wch: 50 }, // קישור
+        { wch: 30 }, // סיבה
         { wch: 12 }, // תאריך
       ];
 
+      // Apply styling
+      styleWorksheet(ws, 6, hasHeaders);
+
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'קבצים שלא הורדו');
+      XLSX.utils.book_append_sheet(wb, ws, 'סטטוס סנכרון');
 
-      const xlsxData = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([xlsxData], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      await writeStyledXlsx(courseHandle, 'סטטוס סנכרון.xlsx', wb);
+      log(`  ✓ Status XLS written for ${courseName}`);
 
-      const fh = await semesterHandle.getFileHandle('קבצים שלא הורדו.xlsx', { create: true });
-      const writable = await fh.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      // Clean up old README.md if it exists
+      try { await courseHandle.removeEntry('README.md'); } catch {}
 
-      const newEntries = merged.length - existingRows.length;
-      log(`Excel updated: ${merged.length} total items (${newEntries >= 0 ? newEntries : 0} new from this run) in קבצים שלא הורדו.xlsx`);
     } catch (e) {
-      log(`ERROR generating Excel: ${e.message}`);
+      log(`  ❌ ERROR generating course status XLS for ${courseName}: ${e.message}`);
+      console.error('[MoodleSync] generateCourseStatus error:', e);
     }
   }
 
   // ============================================================
-  // README GENERATION
+  // SEMESTER-LEVEL COMBINED STATUS XLS
   // ============================================================
 
-  async function generateReadme(courseHandle, courseName, courseManifest) {
-    const lines = [`# ${courseName}`, '', `Last synced: ${new Date().toISOString().split('T')[0]}`, ''];
-
-    if (!courseManifest || !courseManifest.items) return;
-
-    // Collect all files from manifest, grouped by folder
-    const folders = {};
-    for (const [key, item] of Object.entries(courseManifest.items)) {
-      if (item.status !== 'downloaded' && item.status !== 'extracted') continue;
-
-      // Handle extracted items (savedAs is an array)
-      const paths = Array.isArray(item.savedAs) ? item.savedAs : [item.savedAs];
-      for (const path of paths) {
-        if (!path) continue;
-        const lastSlash = path.lastIndexOf('/');
-        const folder = lastSlash > 0 ? path.substring(0, lastSlash) : '';
-        const file = lastSlash > 0 ? path.substring(lastSlash + 1) : path;
-        if (!folders[folder]) folders[folder] = [];
-        folders[folder].push(file);
+  /**
+   * Generate a combined status XLS at the semester folder level.
+   * Only generated when ALL configured courses have a manifest entry
+   * (i.e., all courses were part of the sync).
+   */
+  async function generateCombinedStatusXls(semesterHandle, manifest, skipByCourse) {
+    try {
+      // Check: does every configured course have a manifest entry?
+      const coursesToCheck = CONFIG.courses.filter(c => !c.disabled);
+      const allSynced = coursesToCheck.every(c => manifest[c.id] && manifest[c.id].items);
+      if (!allSynced) {
+        log('  Skipping combined status XLS — not all courses synced');
+        return;
       }
-    }
 
-    // Root files first
-    if (folders['']) {
-      for (const f of folders[''].sort()) lines.push(`- ${f}`);
-      lines.push('');
-      delete folders[''];
-    }
+      const XLSX = await ensureSheetJS();
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('he-IL', { year: 'numeric', month: '2-digit', day: '2-digit' });
+      const timeStr = now.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
 
-    // Then each folder sorted
-    const sortedFolders = Object.entries(folders).sort(([a], [b]) => a.localeCompare(b, 'he'));
-    for (const [folder, files] of sortedFolders) {
-      const depth = folder.split('/').length;
-      const heading = depth === 1 ? '##' : '###';
-      lines.push(`${heading} ${folder} (${files.length} files)`);
-      lines.push('');
-      for (const f of files.sort()) {
-        const indent = depth > 1 ? '  ' : '';
-        lines.push(`${indent}- ${f}`);
+      const wb = XLSX.utils.book_new();
+
+      // Collect all skipped items across all active courses
+      const allSkipped = [];
+      for (const course of coursesToCheck) {
+        const courseSkipped = skipByCourse[course.folderName] || [];
+        for (const item of courseSkipped) {
+          allSkipped.push({
+            'קורס': course.folderName,
+            'מיקום במוודל': item.section || '',
+            'שם': item.name || '',
+            'קישור': item.url || '',
+            'סיבה': item.reason || '',
+            'תאריך': new Date().toISOString().split('T')[0],
+          });
+        }
       }
-      lines.push('');
-    }
 
-    const fh = await courseHandle.getFileHandle('README.md', { create: true });
-    const writable = await fh.createWritable();
-    await writable.write(lines.join('\n'));
-    await writable.close();
+      const aoa = [];
+      aoa.push([`עדכון אחרון: ${dateStr} ${timeStr}`]);
+      const hasHeaders = allSkipped.length > 0;
+      if (hasHeaders) {
+        aoa.push(['קורס', 'מיקום במוודל', 'שם', 'קישור', 'סיבה', 'תאריך']);
+        for (const r of allSkipped) {
+          aoa.push([r['קורס'], r['מיקום במוודל'], r['שם'], r['קישור'], r['סיבה'], r['תאריך']]);
+        }
+      } else {
+        aoa.push(['כל הקבצים הורדו בהצלחה בכל הקורסים.']);
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+      ws['!cols'] = [
+        { wch: 18 }, // קורס
+        { wch: 22 }, // מיקום במוודל
+        { wch: 35 }, // שם
+        { wch: 50 }, // קישור
+        { wch: 30 }, // סיבה
+        { wch: 12 }, // תאריך
+      ];
+
+      // Apply styling
+      styleWorksheet(ws, 6, hasHeaders);
+
+      XLSX.utils.book_append_sheet(wb, ws, 'סטטוס סנכרון');
+
+      await writeStyledXlsx(semesterHandle, 'סטטוס סנכרון - כל הקורסים.xlsx', wb);
+
+      log(`  Combined status XLS generated: ${allSkipped.length} items across ${CONFIG.courses.length} courses`);
+    } catch (e) {
+      log(`  ERROR generating combined status XLS: ${e.message}`);
+    }
   }
 
   // ============================================================
@@ -1020,7 +1558,7 @@
     const dryRun = options.dryRun || false;
 
     if (state.running) {
-      log('Sync already running — ignoring');
+      console.log('[MoodleSync] Sync already running — ignoring');
       return;
     }
 
@@ -1028,8 +1566,13 @@
     if (!dryRun) {
       const lockAcquired = await acquireSyncLock(mode);
       if (!lockAcquired) {
+        updateToast('🔒 Another sync is in progress. Wait for it to finish.', 0);
+        const titleEl = state.toastEl && state.toastEl.querySelector('span');
+        if (titleEl) titleEl.textContent = 'Sync Blocked';
         log('Cannot start sync — another sync may be in progress.');
         log('If this is wrong, wait 10 minutes for the stale lock to auto-clear.');
+        await delay(6000);
+        removeToast();
         return;
       }
     }
@@ -1038,33 +1581,50 @@
     state.mode = mode;
     state.log = [];
     state.results = { downloaded: 0, failed: 0, skipped: 0, newItems: 0, updated: 0 };
+    state.progressPercent = 0;
+    state.progressStep = 'Starting...';
+    state.totalDownloads = 0;
+    state.completedDownloads = 0;
+
+    // Ensure toast is displayed
+    if (!state.toastEl) {
+      createToast();
+    }
+
     log(`=== Starting ${mode.toUpperCase()}${dryRun ? ' DRY RUN' : ''} sync ===`);
     log('');
 
     try {
-      // S5 — Login enforcement: always click התחברות before proceeding
+      // S5 — Login enforcement: parameterized login detection
       log('Step 0: Ensuring login...');
-      const loginBtn = document.querySelector('a[href*="login/index.php"], a.btn-login, a[data-title="login,moodle"]');
-      if (loginBtn) {
-        log('  Found login button — clicking...');
-        loginBtn.click();
-        await delay(3000);
-        log('  Login page triggered — please complete login, then re-run sync.');
-        state.running = false;
-        return;
-      }
-      // Also check for the Hebrew login link text
-      const allLinks = document.querySelectorAll('a');
-      for (const link of allLinks) {
-        if (link.textContent.trim() === 'התחברות' || link.textContent.trim() === 'Log in') {
-          log('  Found "התחברות" link — clicking...');
-          link.click();
+
+      // Step 1: Check CSS selectors from LOGIN_SELECTORS
+      const loginSelectors = CONFIG.loginSelectors || ['a[href*="login/index.php"]', 'a.btn-login', 'a[data-title="login,moodle"]'];
+      for (const selector of loginSelectors) {
+        const loginBtn = document.querySelector(selector);
+        if (loginBtn) {
+          log('  Found login button (selector: ' + selector + ') — clicking...');
+          loginBtn.click();
           await delay(3000);
-          log('  Login page triggered — please complete login, then re-run sync.');
-          state.running = false;
+          await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
           return;
         }
       }
+
+      // Step 2: Scan all <a> elements for text matching LOGIN_TEXT_MATCHES
+      const loginTextMatches = CONFIG.loginTextMatches || ['התחברות', 'Log in', 'כניסה', 'Sign in'];
+      const allLinks = document.querySelectorAll('a');
+      for (const link of allLinks) {
+        const linkText = link.textContent.trim();
+        if (loginTextMatches.includes(linkText)) {
+          log('  Found login link (' + linkText + ') — clicking...');
+          link.click();
+          await delay(3000);
+          await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
+          return;
+        }
+      }
+
       // Verify we're actually logged in by checking for user menu
       const userMenu = document.querySelector('.usermenu, .usertext, #user-menu-toggle, .logininfo .username');
       if (!userMenu) {
@@ -1074,22 +1634,30 @@
       }
 
       // Step 1: Get directory handle (S3 — try cached handle first)
+      state.progressPercent = 2; state.progressStep = 'Requesting folder access...';
+      updateToast(state.progressStep, state.progressPercent);
       log('Step 1/8: Requesting folder access...');
       let dirHandle = null;
 
       // S3 — Try cached directory handle from IndexedDB
+      const expectedFolderName = CONFIG.savedFolderName || '';
       try {
         const cachedHandle = await idbGet('directoryHandle');
         if (cachedHandle) {
-          const perm = await cachedHandle.queryPermission({ mode: 'readwrite' });
-          if (perm === 'granted') {
-            dirHandle = cachedHandle;
-            log('  Using cached directory handle from IndexedDB');
+          // If user picked a different folder in settings, invalidate the cache
+          if (expectedFolderName && cachedHandle.name !== expectedFolderName) {
+            log(`  Cached folder "${cachedHandle.name}" differs from settings folder "${expectedFolderName}" — re-picking...`);
           } else {
-            const requested = await cachedHandle.requestPermission({ mode: 'readwrite' });
-            if (requested === 'granted') {
+            const perm = await cachedHandle.queryPermission({ mode: 'readwrite' });
+            if (perm === 'granted') {
               dirHandle = cachedHandle;
-              log('  Re-authorized cached directory handle');
+              log('  Using cached directory handle from IndexedDB');
+            } else {
+              const requested = await cachedHandle.requestPermission({ mode: 'readwrite' });
+              if (requested === 'granted') {
+                dirHandle = cachedHandle;
+                log('  Re-authorized cached directory handle');
+              }
             }
           }
         }
@@ -1097,13 +1665,27 @@
         log(`  Cached handle unavailable: ${e.message}`);
       }
 
-      // Fall back to picker if no cached handle
+      // Fall back to picker if no cached handle (or cache was invalidated)
+      // NOTE: showDirectoryPicker() requires a user gesture. Since sync is
+      // triggered via MutationObserver (not a click), we show a button in the
+      // toast and wait for the user to click it — that click IS a gesture.
       if (!dirHandle) {
-        dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
+        const reason = expectedFolderName
+          ? `Settings folder "${expectedFolderName}" differs from cache — please pick the correct folder.`
+          : 'No saved folder — please pick a folder for your Moodle files.';
+        dirHandle = await requestDirectoryViaToastButton(reason);
         // S3 — Cache the handle for future runs
         await idbSet('directoryHandle', dirHandle);
         log('  Directory handle cached in IndexedDB for future runs');
       }
+
+      // Notify content script of the chosen folder name (for settings display)
+      try {
+        const bridge = document.getElementById('moodle-sync-bridge');
+        if (bridge) {
+          bridge.setAttribute('data-folder-name', dirHandle.name);
+        }
+      } catch (e) { /* ignore */ }
 
       state.rootHandle = dirHandle;
       // Walk CONFIG.rootPath dynamically (e.g. "סמסטר ב׳" → one nested dir inside the picked year folder)
@@ -1128,6 +1710,8 @@
       }
 
       // Step 2: Load manifest
+      state.progressPercent = 8; state.progressStep = 'Loading manifest...';
+      updateToast(state.progressStep, state.progressPercent);
       log('Step 2/8: Loading manifest...');
       state.manifest = await loadManifest(state.semesterHandle);
       const courseCount = Object.keys(state.manifest).length;
@@ -1138,46 +1722,61 @@
         const totalManifestItems = Object.values(state.manifest)
           .reduce((sum, c) => sum + (c.items ? Object.keys(c.items).length : 0), 0);
         if (totalManifestItems === 0) {
-          log('');
-          log('🛑 SAFETY ABORT: Incremental mode with EMPTY manifest.');
-          log('  An empty manifest in incremental mode means ALL files would be');
-          log('  re-downloaded (indistinguishable from a seed run).');
-          log('  This usually means the manifest file could not be read.');
-          log('');
-          log('  To fix: Run a SEED sync first, or check that the manifest file');
-          log('  (.moodle_manifest.json) exists and is readable.');
-          state.running = false;
+          await safetyAbort('🛑 No manifest found — run a Seed sync first before using Incremental.');
           return;
         }
       }
 
-      // S8 — Abort seed into populated folder
+      // S8 — Abort seed into populated folder (check DISK, not manifest)
       if (mode === 'seed') {
+        // Check if any course folders actually exist on disk
+        const existingFolderNames = [];
+        const configFolderNames = new Set(CONFIG.courses.map(c => c.folderName));
+        try {
+          for await (const [name, handle] of state.semesterHandle.entries()) {
+            if (handle.kind === 'directory' && configFolderNames.has(name)) {
+              existingFolderNames.push(name);
+            }
+          }
+        } catch (e) { /* directory iteration failed — treat as empty */ }
+
+        if (existingFolderNames.length > 0) {
+          const listStr = existingFolderNames.map(n => `  • ${n}`).join('\n');
+          await safetyAbort(`🛑 These courses already have downloaded content:\n${listStr}\n\nTo re-download from scratch, delete those folders first, then run Seed again.\nTo update existing content, use Incremental Sync.`);
+          return;
+        }
+        // Disk is clean — clear any stale manifest so we start fresh
         const totalManifestItems = Object.values(state.manifest)
           .reduce((sum, c) => sum + (c.items ? Object.keys(c.items).length : 0), 0);
         if (totalManifestItems > 0) {
-          log('');
-          log('🛑 SAFETY ABORT: Seed run into an already-populated folder.');
-          log(`  The manifest has ${totalManifestItems} items across ${courseCount} courses.`);
-          log('  Running a seed here would create duplicate files.');
-          log('');
-          log('  For a new semester: update rootPath in the config to point to');
-          log('  a new semester folder (e.g. "סמסטר א׳"), then try again.');
-          log('  The directory picker will let you select the year folder and');
-          log('  the engine creates the new semester subfolder automatically.');
-          log('');
-          log('  If you truly want to re-download into this folder, delete');
-          log('  .moodle_manifest.json first and clear the course folders manually.');
-          state.running = false;
-          return;
+          log(`  Seed run: disk is clean but manifest has ${totalManifestItems} stale items — clearing manifest`);
+          state.manifest = {};
         }
       }
 
       // Step 3: Scrape all courses
+      state.progressPercent = 12; state.progressStep = 'Scraping courses...';
+      updateToast(state.progressStep, state.progressPercent);
       log('Step 3/8: Scraping courses...');
       const allItems = [];
+      const activeCourses = CONFIG.courses.filter(c => !c.disabled);
 
-      for (const course of CONFIG.courses) {
+      // Guard: two active courses pointing at the same folder name will write
+      // into the same directory, colliding (files get " (2)" suffixes) and
+      // churning on every sync. Usually a stale/wrong-semester duplicate left
+      // in the config. Warn loudly so the user can remove or rename one.
+      const folderCounts = {};
+      for (const c of activeCourses) {
+        const f = (c.folderName || '').trim();
+        if (f) folderCounts[f] = (folderCounts[f] || 0) + 1;
+      }
+      const dupeFolders = Object.keys(folderCounts).filter(f => folderCounts[f] > 1);
+      if (dupeFolders.length > 0) {
+        log(`  ⚠️ WARNING: ${dupeFolders.length} folder name(s) used by more than one active course: ${dupeFolders.join(', ')}.`);
+        log('     Their files will be merged into one folder and collide. Remove or rename the duplicate course in Settings (often a wrong-semester leftover).');
+      }
+
+      for (const course of activeCourses) {
         try {
           const { items, sectionNames } = await scrapeCourse(course.id, course.folderName);
           const sectionMapping = buildSectionMapping(sectionNames, course.folderName);
@@ -1204,9 +1803,14 @@
       log(`  Total items scraped: ${allItems.length}`);
 
       // Step 4: Resolve URLs, expand folders, check assignments
+      state.progressPercent = 25; state.progressStep = 'Resolving URLs...';
+      updateToast(state.progressStep, state.progressPercent);
       log('Step 4/8: Resolving URLs and expanding folders...');
       const downloadQueue = [];
       const skipQueue = [];
+      // Track cmids we skip re-resolving in incremental mode (already known),
+      // so the "unchanged course" fast-path below still counts them.
+      const knownSkippedCmids = {};
 
       for (let i = 0; i < allItems.length; i++) {
         const item = allItems[i];
@@ -1216,9 +1820,11 @@
         }
 
         if (item.type === 'resource') {
-          if (!item.url.includes('/moodle/')) {
-            item.url = `${CONFIG.baseUrl}/moodle/mod/resource/view.php?id=${item.cmid}`;
-          }
+          // Force a direct file download. Resources set to "embed"/"in-page"
+          // display return an HTML wrapper page (img/object src=pluginfile) that
+          // we'd otherwise skip as a Moodle HTML page; &redirect=1 makes Moodle
+          // serve the file itself. Harmless for normal force-download resources.
+          item.fetchUrl = `${CONFIG.baseUrl}${CONFIG.basePath}mod/resource/view.php?id=${item.cmid}&redirect=1`;
           downloadQueue.push(item);
 
         } else if (item.type === 'folder') {
@@ -1243,6 +1849,14 @@
           await delay(CONFIG.delayBetweenFetches);
 
         } else if (item.type === 'url') {
+          // Incremental: if we already downloaded or already gave up on this
+          // link in a previous run, don't re-resolve it. mod/url targets are
+          // cross-origin (Colab, Google Sites, bgu4u) and the un-downloadable
+          // ones fail slowly with retries on every run.
+          if (mode === 'incremental' && isKnownInManifest(item.courseId, item.cmid)) {
+            (knownSkippedCmids[item.courseId] = knownSkippedCmids[item.courseId] || new Set()).add(item.cmid);
+            continue;
+          }
           const resolved = await resolveModUrl(item);
           if (!resolved) {
             skipQueue.push({ ...item, reason: 'URL resolution failed' });
@@ -1266,23 +1880,23 @@
           } else if (resolved.type === 'video') {
             // Intentionally silent — videos are not downloaded and not logged to Excel
           } else if (resolved.type === 'bgu_internal') {
-            // Try to probe the BGU page for downloadable files
-            log(`  Probing BGU internal link: ${resolved.url}`);
-            const probe = await probeBguInternalLink(resolved.url);
-            if (probe.found) {
-              if (probe.directBlob) {
-                // The URL itself was a file — queue it for direct save
-                log(`  → Direct file found (${probe.contentType})`);
-                downloadQueue.push({ ...item, fetchUrl: resolved.url, direct: true });
-              } else {
-                // Found a link to a file on the page
-                log(`  → Found downloadable link: ${probe.name}`);
-                downloadQueue.push({ ...item, fetchUrl: probe.url, direct: true });
+            // Cross-origin (bgu4u / in.bgu / iguide). A page-context fetch is
+            // CORS-blocked, so route through the background worker (crossOrigin).
+            let targetUrl = resolved.url;
+            // BGU syllabus portal: !app.gate?app=ann&… renders a JS frameset
+            // whose inner !app.ann frame serves the PDF. Build that inner URL
+            // directly: swap the path, drop app, add lang=he, keep step + rn_*.
+            try {
+              const u = new URL(targetUrl);
+              if (/!app\.gate/.test(u.pathname) && u.searchParams.get('app') === 'ann') {
+                u.pathname = u.pathname.replace('!app.gate', '!app.ann');
+                u.searchParams.delete('app');
+                u.searchParams.set('lang', 'he');
+                targetUrl = u.href;
               }
-            } else {
-              log(`  → ${probe.reason}`);
-              skipQueue.push({ ...item, reason: probe.reason, url: resolved.url });
-            }
+            } catch (e) { /* keep original URL */ }
+            log(`  → BGU internal — fetching via background worker`);
+            downloadQueue.push({ ...item, fetchUrl: targetUrl, crossOrigin: true, direct: true });
           } else {
             skipQueue.push({ ...item, reason: resolved.reason || 'external link', url: resolved.url || '' });
           }
@@ -1291,10 +1905,28 @@
         } else if (item.type === 'assign') {
           const files = await checkAssignPatternB(item);
           if (files.length > 0) {
-            // Use the section's mapped folder (e.g. "תרגילי בית", "הגשות", "פרוייקט" — whatever Moodle calls it)
-            const baseFolder = item.diskFolder || item.section;
+            // Base off the SECTION folder (not item.diskFolder, which already
+            // carries the /תרגילים grouping) so submissions/solutions/questions
+            // sit as siblings: <section>/תרגילים, /הגשות, /פתרונות מרצה.
+            const sm = state.sectionMap[item.courseId] || {};
+            const baseFolder = (sm[item.section] && sm[item.section].folder) || item.section;
+            const isExam = isExamRelated(item.section) || isExamRelated(item.name);
             for (const file of files) {
-              const diskFolder = isSolutionFile(file.name) ? `${baseFolder}/פתרונות` : baseFolder;
+              let diskFolder;
+              if (file.isSubmission) {
+                // The student's own uploaded submission → הגשות.
+                diskFolder = `${baseFolder}/הגשות`;
+              } else if (isExam) {
+                // For exams: each exam gets its own identity subfolder (year+semester+moed)
+                const identity = extractExamIdentity(file.name) || extractExamIdentity(item.name) || extractExamIdentity(item.section);
+                diskFolder = identity ? `${baseFolder}/${identity}` : baseFolder;
+              } else if (isSolutionFile(file.name)) {
+                // Lecturer solution attached to the assignment → פתרונות מרצה.
+                diskFolder = `${baseFolder}/פתרונות מרצה`;
+              } else {
+                // The assignment brief / question → תרגילים.
+                diskFolder = `${baseFolder}/תרגילים`;
+              }
               downloadQueue.push({
                 ...item,
                 name: file.name,
@@ -1342,14 +1974,27 @@
           if (!scrapedKeysByCourse[cid]) scrapedKeysByCourse[cid] = new Set();
           scrapedKeysByCourse[cid].add(manifestKey(item));
         }
+        // Add back the already-downloaded links we skipped re-resolving above —
+        // otherwise the course looks "changed" (missing keys) and we'd HEAD
+        // every file, defeating the fast-path and re-checking unchanged items.
+        for (const [cid, set] of Object.entries(knownSkippedCmids)) {
+          for (const cmid of set) {
+            const e = state.manifest[cid] && state.manifest[cid].items[cmid];
+            if (e && (e.status === 'downloaded' || e.status === 'extracted')) {
+              if (!scrapedKeysByCourse[cid]) scrapedKeysByCourse[cid] = new Set();
+              scrapedKeysByCourse[cid].add(cmid);
+            }
+          }
+        }
 
         const unchangedCourses = new Set();
         for (const [cid, scrapedKeys] of Object.entries(scrapedKeysByCourse)) {
           const courseManifest = state.manifest[cid];
           if (!courseManifest || !courseManifest.items) continue;
-          const manifestKeys = new Set(Object.keys(courseManifest.items).filter(
-            k => courseManifest.items[k].status !== 'removed_from_moodle'
-          ));
+          const manifestKeys = new Set(Object.keys(courseManifest.items).filter(k => {
+            const s = courseManifest.items[k].status;
+            return s !== 'removed_from_moodle' && s !== 'skipped';
+          }));
           // Same keys = same items on Moodle. Skip HEAD checks for this course.
           if (scrapedKeys.size === manifestKeys.size &&
               [...scrapedKeys].every(k => manifestKeys.has(k))) {
@@ -1369,6 +2014,11 @@
           if (courseManifest && courseManifest.items && courseManifest.items[key]) {
             const existing = courseManifest.items[key];
 
+            // Previously skipped/failed (restricted, unsupported, or errored in
+            // an earlier run) — don't retry it every sync. A fresh Seed run
+            // re-attempts everything from scratch.
+            if (existing.status === 'skipped') continue;
+
             // If this course has identical items to the manifest, skip the
             // expensive HEAD request — no new/removed items means updates are
             // extremely unlikely for typical Moodle usage.
@@ -1381,15 +2031,22 @@
               headRequestCount++;
               const fetchUrl = item.fetchUrl || (item.direct
                 ? item.url
-                : `${CONFIG.baseUrl}/moodle/mod/resource/view.php?id=${item.cmid}`);
+                : `${CONFIG.baseUrl}${CONFIG.basePath}mod/resource/view.php?id=${item.cmid}`);
               const fetchOpts = { method: 'HEAD', redirect: 'follow' };
               if (!item.googleExport) fetchOpts.credentials = 'include';
               const headResp = await fetch(fetchUrl, fetchOpts);
               if (headResp.ok) {
                 const newSize = parseInt(headResp.headers.get('content-length') || '0');
-                const newEtag = headResp.headers.get('etag') || '';
+                // Only trust STRONG, reliable validators. Weak etags (W/"...")
+                // can differ between requests/server-nodes for identical content
+                // (BGU serves weak etags + gzip with no Content-Length), which
+                // caused every file to look "updated" and get re-downloaded.
+                // Ignore weak etags; rely on a real size change otherwise.
+                const rawEtag = headResp.headers.get('etag') || '';
+                const newStrongEtag = rawEtag && !rawEtag.startsWith('W/') ? rawEtag : '';
+                const storedStrongEtag = existing.etag && !String(existing.etag).startsWith('W/') ? existing.etag : '';
                 const sizeChanged = newSize > 0 && existing.fileSize && newSize !== existing.fileSize;
-                const etagChanged = newEtag && existing.etag && newEtag !== existing.etag;
+                const etagChanged = newStrongEtag && storedStrongEtag && newStrongEtag !== storedStrongEtag;
                 if (sizeChanged || etagChanged) {
                   log(`  UPDATE detected: ${item.name} (size: ${existing.fileSize}→${newSize})`);
                   item._deleteOldFile = existing.savedAs; // mark old file for deletion
@@ -1413,14 +2070,7 @@
         // S4 — Download count safety valve
         const totalScraped = allItems.length;
         if (filtered.length > 10 && totalScraped > 0 && filtered.length > totalScraped * 0.5) {
-          log('');
-          log(`🛑 SAFETY ABORT: Incremental queue (${filtered.length}) exceeds 50% of`);
-          log(`  total scraped items (${totalScraped}). This looks like a full re-download.`);
-          log('  Possible causes: manifest corruption, manifest read failure, or');
-          log('  Moodle changed item IDs.');
-          log('');
-          log('  To proceed anyway, run a SEED sync instead.');
-          state.running = false;
+          await safetyAbort(`🛑 ${filtered.length}/${totalScraped} files queued (>50%) — looks like a full re-download. Run Seed instead.`);
           return;
         }
         // Removal detection: flag manifest items no longer on Moodle
@@ -1447,9 +2097,14 @@
       }
 
       // Step 6: Download all files
+      state.totalDownloads = downloadQueue.length;
+      state.completedDownloads = 0;
+      state.progressPercent = 40; state.progressStep = `Downloading 0/${downloadQueue.length}...`;
+      updateToast(state.progressStep, state.progressPercent);
       log(`Step 6/8: Downloading ${downloadQueue.length} files...`);
       let downloaded = 0;
       let failed = 0;
+      const downloadedFiles = [];  // track names for end-of-sync report
 
       // === DRY RUN: skip download, manifest, and output generation ===
       if (dryRun) {
@@ -1486,11 +2141,6 @@
       } else {
         // === REAL RUN: download, save, generate ===
 
-        // Show progress bar
-        const progressContainer = document.getElementById('sync-progress');
-        const progressBar = document.getElementById('sync-progress-bar');
-        if (progressContainer) progressContainer.style.display = 'block';
-
         for (let i = 0; i < downloadQueue.length; i++) {
           const item = downloadQueue[i];
           if (i > 0 && i % 10 === 0) {
@@ -1499,11 +2149,10 @@
           if (i % 5 === 0 || i === downloadQueue.length - 1) {
             log(`  [${i + 1}/${downloadQueue.length}] ${item.courseName}/${item.name}`);
           }
-          // Update progress bar
-          if (progressBar && downloadQueue.length > 0) {
-            progressBar.style.width = `${Math.round(((i + 1) / downloadQueue.length) * 100)}%`;
-          }
 
+          // Per-item guard: a single failure (bad name, transient FS/network
+          // error) must never abort the whole run and lose every later course.
+          try {
           const courseHandle = await getNestedDir(state.semesterHandle, item.courseName);
 
           // If this is an update, delete the old file on disk first
@@ -1527,6 +2176,12 @@
           const result = await downloadAndSave(item, courseHandle);
           const key = manifestKey(item);
 
+          // Update progress
+          state.completedDownloads = i + 1;
+          state.progressPercent = 40 + Math.round(((i + 1) / downloadQueue.length) * 50);
+          state.progressStep = `Downloading ${i + 1}/${downloadQueue.length}...`;
+          updateToast(state.progressStep, state.progressPercent);
+
           // Ensure course entry in manifest
           if (!state.manifest[item.courseId]) {
             state.manifest[item.courseId] = {
@@ -1540,6 +2195,7 @@
 
           if (result.success) {
             downloaded++;
+            downloadedFiles.push({ name: item.name, course: item.courseName, savedAs: result.savedAs });
             const status = result.extracted ? 'extracted' : 'downloaded';
             state.manifest[item.courseId].items[key] = {
               section: item.section,
@@ -1559,6 +2215,11 @@
             log(`  ✗ FAILED: ${item.name} — ${result.error}`);
             skipQueue.push({ ...item, reason: `download error: ${result.error}` });
           }
+          } catch (e) {
+            failed++;
+            log(`  ✗ ERROR: ${item.courseName}/${item.name} — ${e.message} (skipped, continuing)`);
+            skipQueue.push({ ...item, reason: `processing error: ${e.message}` });
+          }
 
           await delay(CONFIG.delayBetweenFetches);
         }
@@ -1566,27 +2227,69 @@
         log(`  Downloads complete: ${downloaded} ok, ${failed} failed`);
 
         // Step 7: Save manifest with section mappings
+        state.progressPercent = 92; state.progressStep = 'Saving manifest...';
+        updateToast(state.progressStep, state.progressPercent);
         log('Step 7/8: Saving manifest and section mappings...');
-        for (const course of CONFIG.courses) {
+        for (const course of activeCourses) {
           if (state.manifest[course.id]) {
             state.manifest[course.id].lastSync = new Date().toISOString();
             state.manifest[course.id].sectionMap = state.sectionMap[course.id] || {};
           }
         }
+
+        // Record skipped/failed items in the manifest so future incremental
+        // syncs know not to retry them (external links, restricted resources,
+        // Colab, the BGU syllabus portal, download errors). A fresh Seed run
+        // starts clean and re-attempts everything.
+        for (const sk of skipQueue) {
+          if (!sk || sk.courseId == null) continue;
+          if (!state.manifest[sk.courseId]) {
+            state.manifest[sk.courseId] = {
+              courseName: sk.courseName, folderName: sk.courseName,
+              lastSync: new Date().toISOString(),
+              sectionMap: state.sectionMap[sk.courseId] || {}, items: {},
+            };
+          }
+          const k = manifestKey(sk);
+          const prev = state.manifest[sk.courseId].items[k];
+          // Never let a skip clobber a successful download of the same item.
+          if (prev && (prev.status === 'downloaded' || prev.status === 'extracted')) continue;
+          state.manifest[sk.courseId].items[k] = {
+            section: sk.section,
+            moodleName: sk.name,
+            type: sk.type,
+            status: 'skipped',
+            reason: sk.reason || 'skipped',
+            skippedAt: new Date().toISOString(),
+          };
+        }
+
         await saveManifest(state.semesterHandle, state.manifest);
         log('  Manifest saved');
 
-        // Step 8: Generate READMEs and Excel
-        log('Step 8/8: Generating READMEs and Excel...');
-        for (const course of CONFIG.courses) {
+        // Step 8: Generate per-course XLS, combined semester XLS, and skip Excel
+        state.progressPercent = 96; state.progressStep = 'Generating reports...';
+        updateToast(state.progressStep, state.progressPercent);
+        log('Step 8/8: Generating status files and Excel...');
+        // Group skipped items by course for per-course status
+        const skipByCourse = {};
+        for (const item of skipQueue) {
+          const cname = item.courseName || 'unknown';
+          if (!skipByCourse[cname]) skipByCourse[cname] = [];
+          skipByCourse[cname].push(item);
+        }
+        for (const course of activeCourses) {
+          log(`  Checking course ${course.folderName} (id=${course.id}): manifest entry exists = ${!!state.manifest[course.id]}`);
           if (state.manifest[course.id]) {
             const courseHandle = await getNestedDir(state.semesterHandle, course.folderName);
-            await generateReadme(courseHandle, course.folderName, state.manifest[course.id]);
+            await generateCourseStatus(courseHandle, course.folderName, state.manifest[course.id], skipByCourse[course.folderName] || []);
+          } else {
+            log(`  ⚠️ Skipping status XLS for ${course.folderName} — no manifest entry (id=${course.id})`);
           }
         }
-        log('  READMEs generated');
+        log('  Course status files generated');
 
-        await generateExcel(state.semesterHandle, skipQueue);
+        await generateCombinedStatusXls(state.semesterHandle, state.manifest, skipByCourse);
 
         // Summary
         log('');
@@ -1598,16 +2301,20 @@
         log(`Failed: ${failed}`);
         log(`Skipped: ${skipQueue.length}`);
         log('');
-        for (const course of CONFIG.courses) {
+        for (const course of activeCourses) {
           const m = state.manifest[course.id];
           const count = m ? Object.keys(m.items).length : 0;
           log(`  ${course.folderName}: ${count} items`);
         }
         log('');
         log('Done!');
+        state.progressPercent = 100; state.progressStep = 'Complete!';
 
         state.results = { downloaded, failed, skipped: skipQueue.length };
         state.skipQueue = skipQueue;
+
+        // Show rich completion report in the toast (stays until user closes)
+        showCompletionReport(mode, downloaded, failed, skipQueue, downloadedFiles);
 
         // Desktop notification so unattended scheduled syncs are visible
         try {
@@ -1631,208 +2338,373 @@
       if (!dryRun) {
         try { await releaseSyncLock(); } catch {}
       }
-      // Re-enable buttons
-      const seedBtn = document.getElementById('sync-seed');
-      const incBtn = document.getElementById('sync-incremental');
-      const dryBtn = document.getElementById('sync-dryrun');
-      if (seedBtn) seedBtn.disabled = false;
-      if (incBtn) incBtn.disabled = false;
-      if (dryBtn) dryBtn.disabled = false;
-      updateUI();
-    }
-  }
-
-  // ============================================================
-  // UI
-  // ============================================================
-
-  function createUI() {
-    const existing = document.getElementById('moodle-sync-ui');
-    if (existing) existing.remove();
-
-    const container = document.createElement('div');
-    container.id = 'moodle-sync-ui';
-    container.style.cssText = `
-      position: fixed; top: 0; right: 0; width: 420px; height: 100vh;
-      background: white; border-left: 2px solid #1565C0; z-index: 999999;
-      display: flex; flex-direction: column; font-family: system-ui, -apple-system, sans-serif;
-      font-size: 13px; box-shadow: -4px 0 16px rgba(0,0,0,0.2);
-    `;
-
-    container.innerHTML = `
-      <div style="padding:16px 18px;background:linear-gradient(135deg,#1565C0,#1976D2);color:white;">
-        <h2 style="margin:0;font-size:18px;font-weight:700;">BGU Moodle Sync</h2>
-        <p style="margin:4px 0 0;opacity:0.8;font-size:11px;">v2.6 — One-click course material sync (S1–S11 + Excel merge, retry, progress bar)</p>
-      </div>
-      <div style="padding:14px 18px;display:flex;gap:10px;">
-        <button id="sync-seed" style="flex:1;padding:12px 8px;background:#2E7D32;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;transition:opacity .15s;">
-          🌱 Seed Run (Full)
-        </button>
-        <button id="sync-incremental" style="flex:1;padding:12px 8px;background:#E65100;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;transition:opacity .15s;">
-          🔄 Incremental Sync
-        </button>
-      </div>
-      <div style="padding:0 18px 10px;display:flex;gap:10px;">
-        <button id="sync-dryrun" style="flex:1;padding:8px 8px;background:#6A1B9A;color:white;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;transition:opacity .15s;">
-          🔍 Dry Run (Preview)
-        </button>
-      </div>
-      <div id="sync-status" style="padding:8px 18px;background:#E3F2FD;font-weight:600;color:#1565C0;font-size:12px;">
-        Ready. Choose a sync mode above.
-      </div>
-      <div id="sync-progress" style="display:none;padding:0 18px;">
-        <div style="background:#e0e0e0;border-radius:4px;height:6px;margin:8px 0;">
-          <div id="sync-progress-bar" style="background:#1565C0;height:100%;border-radius:4px;width:0%;transition:width .3s;"></div>
-        </div>
-      </div>
-      <div id="sync-log" style="flex:1;overflow-y:auto;padding:10px 18px;font-family:'Cascadia Code','Fira Code',monospace;font-size:11px;white-space:pre-wrap;color:#333;background:#FAFAFA;line-height:1.5;">
-      </div>
-      <div style="padding:10px 18px;background:#f5f5f5;border-top:1px solid #e0e0e0;font-size:11px;color:#666;">
-        Tip: Run from any moodle.bgu.ac.il page. Point picker to your root download folder.
-      </div>
-    `;
-
-    document.body.appendChild(container);
-
-    document.getElementById('sync-seed').onclick = () => {
-      document.getElementById('sync-seed').disabled = true;
-      document.getElementById('sync-incremental').disabled = true;
-      document.getElementById('sync-dryrun').disabled = true;
-      runSync('seed').catch(e => log('FATAL: ' + e.message));
-    };
-
-    document.getElementById('sync-incremental').onclick = () => {
-      document.getElementById('sync-seed').disabled = true;
-      document.getElementById('sync-incremental').disabled = true;
-      document.getElementById('sync-dryrun').disabled = true;
-      runSync('incremental').catch(e => log('FATAL: ' + e.message));
-    };
-
-    document.getElementById('sync-dryrun').onclick = () => {
-      document.getElementById('sync-seed').disabled = true;
-      document.getElementById('sync-incremental').disabled = true;
-      document.getElementById('sync-dryrun').disabled = true;
-      runSync('incremental', { dryRun: true }).catch(e => log('FATAL: ' + e.message));
-    };
-  }
-
-  function updateUI() {
-    const logEl = document.getElementById('sync-log');
-    if (logEl) {
-      logEl.textContent = state.log.join('\n');
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-    const statusEl = document.getElementById('sync-status');
-    if (statusEl && state.log.length > 0) {
-      statusEl.textContent = state.log[state.log.length - 1];
-    }
-  }
-
-  // ============================================================
-  // SETUP FORM — shown when CONFIG.courses is empty
-  // ============================================================
-
-  function showSetupForm() {
-    const formHtml = `
-      <div style="padding:18px;">
-        <h3 style="margin:0 0 12px;font-size:15px;color:#1565C0;">First-Time Setup</h3>
-        <p style="margin:0 0 12px;font-size:12px;color:#666;">
-          No config found. Enter your semester details and courses below.
-          This creates a <code>moodle_sync_config.json</code> in your semester folder.
-          When the folder picker opens, select your <b>year folder</b> (e.g. שנה ג׳).
-        </p>
-        <label style="font-size:12px;font-weight:600;">Semester identifier (appears in course titles):</label>
-        <input id="cfg-semester" placeholder="e.g. סמ 2" value="" style="width:100%;padding:6px;margin:4px 0 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-
-        <label style="font-size:12px;font-weight:600;">Semester folder name (inside the year folder you'll pick):</label>
-        <input id="cfg-rootpath" placeholder="e.g. סמסטר ב׳" value="" style="width:100%;padding:6px;margin:4px 0 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
-
-        <label style="font-size:12px;font-weight:600;">Courses (one per line: <code>ID | Folder Name</code>):</label>
-        <textarea id="cfg-courses" rows="6" placeholder="64674 | הנדסת חשמל&#10;65670 | מימון" style="width:100%;padding:6px;margin:4px 0 10px;border:1px solid #ccc;border-radius:4px;font-size:12px;font-family:monospace;"></textarea>
-        <p style="font-size:11px;color:#888;margin:0 0 12px;">
-          Find course IDs in Moodle URLs: <code>course/view.php?id=<b>64674</b></code>
-        </p>
-
-        <button id="cfg-save" style="width:100%;padding:10px;background:#1565C0;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">
-          Save Config & Continue
-        </button>
-      </div>
-    `;
-
-    const container = document.getElementById('moodle-sync-ui');
-    const logEl = document.getElementById('sync-log');
-    if (logEl) logEl.innerHTML = formHtml;
-
-    document.getElementById('cfg-save').onclick = () => {
-      const semester = document.getElementById('cfg-semester').value.trim();
-      const rootPath = document.getElementById('cfg-rootpath').value.trim();
-      const coursesText = document.getElementById('cfg-courses').value.trim();
-
-      if (!semester || !rootPath || !coursesText) {
-        alert('Please fill in all fields.');
-        return;
+      // Don't remove toast here — the completion report stays until user closes it.
+      // Only remove if sync failed fatally (no report was shown).
+      if (state.progressPercent < 100) {
+        removeToast();
       }
+    }
+  }
 
-      const courses = coursesText.split('\n').map(line => {
-        const parts = line.split('|').map(s => s.trim());
-        if (parts.length < 2) return null;
-        return { id: parseInt(parts[0]), moodleName: '', folderName: parts[1] };
-      }).filter(Boolean);
+  // ============================================================
+  // FLOATING TOAST UI
+  // ============================================================
 
-      if (courses.length === 0) {
-        alert('Please enter at least one course.');
-        return;
+  function createToast() {
+    // Remove existing toast
+    removeToast();
+
+    const toast = document.createElement('div');
+    toast.id = 'moodle-sync-toast';
+    toast.style.cssText = `
+      position: fixed; bottom: 16px; right: 16px; width: 300px; z-index: 999999;
+      background: rgba(0, 0, 0, 0.85); color: white; border-radius: 8px;
+      padding: 12px 16px; font-family: system-ui, -apple-system, sans-serif;
+      font-size: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    `;
+
+    toast.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 600;">Syncing...</span>
+        <button id="moodle-sync-toast-close" style="background: none; border: none; color: white; cursor: pointer; font-size: 16px; padding: 0;">×</button>
+      </div>
+      <div id="moodle-sync-toast-text" style="margin-bottom: 8px; height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Starting sync...</div>
+      <div style="background: rgba(255, 255, 255, 0.2); border-radius: 4px; height: 4px; margin-bottom: 4px;">
+        <div id="moodle-sync-toast-progress" style="background: #1565C0; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
+      </div>
+      <div id="moodle-sync-toast-percent" style="font-size: 11px; color: rgba(255, 255, 255, 0.7);">0%</div>
+    `;
+
+    document.body.appendChild(toast);
+    state.toastEl = toast;
+
+    document.getElementById('moodle-sync-toast-close').onclick = (e) => {
+      e.preventDefault();
+      removeToast();
+    };
+  }
+
+  function updateToast(text, percent) {
+    const toast = state.toastEl;
+    if (!toast) return;
+
+    if (text) {
+      const textEl = document.getElementById('moodle-sync-toast-text');
+      if (textEl) textEl.textContent = text;
+    }
+
+    if (percent !== undefined) {
+      const progressEl = document.getElementById('moodle-sync-toast-progress');
+      const percentEl = document.getElementById('moodle-sync-toast-percent');
+      if (progressEl) progressEl.style.width = Math.min(100, Math.max(0, percent)) + '%';
+      if (percentEl) percentEl.textContent = Math.round(percent) + '%';
+    }
+  }
+
+  function removeToast() {
+    const existing = document.getElementById('moodle-sync-toast');
+    if (existing) {
+      existing.remove();
+      state.toastEl = null;
+    }
+  }
+
+  /**
+   * Show a rich completion report in the toast.
+   * - Seed: shows success/failure summary + list of items that weren't downloaded.
+   * - Incremental: shows list of newly downloaded files.
+   * Toast stays visible until the user closes it.
+   */
+  function showCompletionReport(mode, downloaded, failed, skipQueue, downloadedFiles) {
+    removeToast();
+
+    const toast = document.createElement('div');
+    toast.id = 'moodle-sync-toast';
+    toast.style.cssText = `
+      position: fixed; bottom: 16px; right: 16px; width: 340px; max-height: 70vh; z-index: 999999;
+      background: rgba(0, 0, 0, 0.92); color: white; border-radius: 10px;
+      padding: 14px 16px; font-family: system-ui, -apple-system, sans-serif;
+      font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      display: flex; flex-direction: column;
+    `;
+
+    const isFullySuccessful = failed === 0 && skipQueue.length === 0;
+    const modeLabel = mode === 'seed' ? 'Seed Run' : 'Incremental Sync';
+    const statusIcon = isFullySuccessful ? '✅' : '⚠️';
+    // Note: failed items are already included in skipQueue (pushed there on download error),
+    // so we use skipQueue.length alone to avoid double-counting.
+    const statusText = isFullySuccessful ? 'Complete — all files downloaded' : `Complete — ${skipQueue.length} item(s) not downloaded`;
+
+    let listHtml = '';
+
+    if (mode === 'seed') {
+      // Seed: focus on what WASN'T downloaded
+      if (isFullySuccessful) {
+        listHtml = `<div style="color: #81C784; padding: 8px 0;">${downloaded} files downloaded successfully.</div>`;
+      } else {
+        if (downloaded > 0) {
+          listHtml += `<div style="color: #81C784; margin-bottom: 6px;">${downloaded} files downloaded successfully.</div>`;
+        }
+        const failItems = skipQueue.slice(0, 30); // cap at 30 to avoid overflow
+        listHtml += `<div style="color: #FFB74D; margin-bottom: 4px; font-weight: 600;">Not downloaded:</div>`;
+        listHtml += '<div style="max-height: 40vh; overflow-y: auto; padding-right: 4px;">';
+        for (const item of failItems) {
+          const reason = item.reason || '';
+          listHtml += `<div style="padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.1); direction: rtl; text-align: right;">
+            <span style="color: #fff;">${item.name}</span>
+            <span style="color: rgba(255,255,255,0.5); font-size: 11px; display: block;">${item.courseName || ''} — ${reason}</span>
+          </div>`;
+        }
+        if (skipQueue.length > 30) {
+          listHtml += `<div style="color: rgba(255,255,255,0.5); padding: 4px 0; font-size: 11px;">ועוד ${skipQueue.length - 30} פריטים...</div>`;
+        }
+        listHtml += '</div>';
       }
+    } else {
+      // Incremental: focus on what WAS downloaded
+      if (downloadedFiles.length === 0) {
+        listHtml = `<div style="color: #81C784; padding: 8px 0;">הכל מעודכן — אין קבצים חדשים.</div>`;
+      } else {
+        listHtml += `<div style="color: #81C784; margin-bottom: 4px; font-weight: 600;">${downloadedFiles.length} קבצים חדשים:</div>`;
+        listHtml += '<div style="max-height: 40vh; overflow-y: auto; padding-right: 4px;">';
+        for (const file of downloadedFiles) {
+          listHtml += `<div style="padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.1); direction: rtl; text-align: right;">
+            <span style="color: #fff;">${file.name}</span>
+            <span style="color: rgba(255,255,255,0.5); font-size: 11px; display: block;">${file.course}</span>
+          </div>`;
+        }
+        listHtml += '</div>';
+      }
+      // Also mention failures if any
+      if (skipQueue.length > 0) {
+        listHtml += `<div style="color: #FFB74D; margin-top: 6px; font-size: 11px;">${skipQueue.length} פריטים לא הורדו — ראה סטטוס סנכרון - כל הקורסים.xlsx</div>`;
+      }
+    }
 
-      CONFIG.semesterCheck = semester;
-      CONFIG.rootPath = rootPath;
-      CONFIG.courses = courses;
+    toast.innerHTML = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <span style="font-weight: 700; font-size: 13px;">${statusIcon} ${modeLabel}</span>
+        <button id="moodle-sync-report-close" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px; padding: 0; line-height: 1;">×</button>
+      </div>
+      <div style="color: rgba(255,255,255,0.8); margin-bottom: 8px; font-size: 12px;">${statusText}</div>
+      ${listHtml}
+    `;
 
-      // Store config on window for the save step
-      window.__MOODLE_SYNC_CONFIG_PENDING__ = {
-        baseUrl: CONFIG.baseUrl,
-        semesterCheck: semester,
-        rootPath: rootPath,
-        courses: courses,
-        silentSkipTypes: CONFIG.silentSkipTypes,
-        mergeThreshold: CONFIG.mergeThreshold,
-        delayBetweenFetches: CONFIG.delayBetweenFetches,
-        batchPause: CONFIG.batchPause,
+    document.body.appendChild(toast);
+    state.toastEl = toast;
+
+    document.getElementById('moodle-sync-report-close').onclick = (e) => {
+      e.preventDefault();
+      removeToast();
+    };
+  }
+
+  /**
+   * Shows a "Pick Folder" button inside the toast and returns a Promise
+   * that resolves with the directory handle once the user clicks it.
+   * The click IS a user gesture, so showDirectoryPicker() works.
+   */
+  function requestDirectoryViaToastButton(promptMessage) {
+    return new Promise((resolve, reject) => {
+      // Ensure toast exists
+      if (!state.toastEl) createToast();
+
+      const textEl = document.getElementById('moodle-sync-toast-text');
+      if (textEl) textEl.textContent = promptMessage || 'Please pick a folder to continue.';
+
+      // Hide progress bar during this prompt
+      const progressBar = state.toastEl.querySelector('#moodle-sync-toast-progress');
+      const percentEl = document.getElementById('moodle-sync-toast-percent');
+      if (progressBar) progressBar.parentElement.style.display = 'none';
+      if (percentEl) percentEl.style.display = 'none';
+
+      // Create the button
+      const btn = document.createElement('button');
+      btn.id = 'moodle-sync-pick-folder-btn';
+      btn.textContent = '📂 Pick Folder';
+      btn.style.cssText = `
+        display: block; width: 100%; margin-top: 8px; padding: 8px 0;
+        background: #1565C0; color: white; border: none; border-radius: 4px;
+        cursor: pointer; font-size: 13px; font-weight: 600;
+      `;
+      btn.onmouseenter = () => { btn.style.background = '#1976D2'; };
+      btn.onmouseleave = () => { btn.style.background = '#1565C0'; };
+
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = 'Opening picker...';
+        try {
+          const handle = await showDirectoryPicker({ mode: 'readwrite' });
+          // Restore progress bar
+          if (progressBar) progressBar.parentElement.style.display = '';
+          if (percentEl) percentEl.style.display = '';
+          btn.remove();
+          resolve(handle);
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '📂 Pick Folder (try again)';
+          if (e.name === 'AbortError') {
+            // User cancelled — let them try again, don't reject
+            log('  Folder picker cancelled — click the button to try again.');
+          } else {
+            btn.remove();
+            reject(e);
+          }
+        }
       };
 
-      // Clear form, show normal UI
-      if (logEl) logEl.textContent = '';
-      log(`Config set: ${courses.length} courses, semester "${semester}"`);
-      log('Ready! Choose a sync mode above.');
-
-      // Enable buttons
-      document.getElementById('sync-seed').disabled = false;
-      document.getElementById('sync-incremental').disabled = false;
-      document.getElementById('sync-dryrun').disabled = false;
-    };
-
-    // Disable sync buttons until config is saved
-    document.getElementById('sync-seed').disabled = true;
-    document.getElementById('sync-incremental').disabled = true;
-    document.getElementById('sync-dryrun').disabled = true;
+      // Insert button into toast
+      state.toastEl.appendChild(btn);
+    });
   }
+
+  /**
+   * Safety abort helper — shows a message in the toast and keeps it visible
+   * for `durationMs` so the user actually reads it, then returns.
+   * Call this INSTEAD of `state.running = false; return;`.
+   */
+  async function safetyAbort(message, durationMs = 8000) {
+    log('');
+    log(message);
+    // Force-update the toast text even though state.running is about to become false
+    updateToast(message, 0);
+    // Expand the text element so long abort messages are fully readable
+    const textEl = document.getElementById('moodle-sync-toast-text');
+    if (textEl) {
+      textEl.style.height = 'auto';
+      textEl.style.whiteSpace = 'normal';
+      textEl.style.overflow = 'visible';
+      textEl.style.lineHeight = '1.4';
+    }
+    // Style the toast to indicate an abort (red accent)
+    const progressEl = document.getElementById('moodle-sync-toast-progress');
+    if (progressEl) progressEl.style.background = '#e53935';
+    const titleEl = state.toastEl && state.toastEl.querySelector('span');
+    if (titleEl) titleEl.textContent = 'Sync Aborted';
+    state.running = false;
+    await delay(durationMs);
+    // Don't removeToast here — the finally block will do it
+  }
+
+  // ============================================================
+  // ============================================================
+  // REST-LIKE API
+  // ============================================================
+
+  window.__MOODLE_SYNC_API__ = {
+    startSync: async function(mode) {
+      // Reload config from DOM bridge before each sync (settings may have changed)
+      await loadConfig();
+      console.log(`[MoodleSync] Config reloaded. ${CONFIG.courses.length} courses.`);
+
+      if (mode === 'seed') {
+        createToast();
+        runSync('seed').catch(e => console.error('Sync failed:', e.message));
+      } else if (mode === 'incremental') {
+        createToast();
+        runSync('incremental').catch(e => console.error('Sync failed:', e.message));
+      }
+    },
+    getStatus: function() {
+      return {
+        running: state.running,
+        progress: state.progressPercent,
+        currentOp: state.progressStep,
+        mode: state.mode,
+        results: state.results,
+        needsConfig: !CONFIG.courses || CONFIG.courses.length === 0,
+        ready: CONFIG.courses && CONFIG.courses.length > 0,
+        courses: CONFIG.courses ? CONFIG.courses.length : 0,
+        totalDownloads: state.totalDownloads,
+        completedDownloads: state.completedDownloads,
+      };
+    },
+    getLog: function() {
+      return state.log;
+    },
+  };
 
   // ============================================================
   // INITIALIZE
   // ============================================================
 
-  (async function init() {
-    createUI();
+  // ============================================================
+  // DOM BRIDGE — Status writing & command watching (CSP-safe)
+  // The content script creates #moodle-sync-bridge and reads
+  // data-status. It writes data-command for us to pick up.
+  // ============================================================
 
+  function updateBridgeStatus() {
+    const bridge = document.getElementById('moodle-sync-bridge');
+    if (!bridge) return;
+    try {
+      bridge.setAttribute('data-status', JSON.stringify(window.__MOODLE_SYNC_API__.getStatus()));
+    } catch (e) { /* ignore serialization errors */ }
+  }
+
+  function updateBridgeLog() {
+    const bridge = document.getElementById('moodle-sync-bridge');
+    if (!bridge) return;
+    try {
+      // Only keep last 200 log entries to avoid attribute size issues
+      const recentLog = state.log.slice(-200);
+      bridge.setAttribute('data-log', JSON.stringify(recentLog));
+    } catch (e) { /* ignore */ }
+  }
+
+  function setupBridgeCommandWatcher() {
+    const bridge = document.getElementById('moodle-sync-bridge');
+    if (!bridge) return;
+    let lastCommandTs = 0;
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === 'data-command') {
+          const raw = bridge.getAttribute('data-command');
+          if (!raw) continue;
+          try {
+            const cmd = JSON.parse(raw);
+            // Deduplicate by timestamp
+            if (cmd._ts && cmd._ts <= lastCommandTs) continue;
+            lastCommandTs = cmd._ts || 0;
+            if (cmd.action === 'startSync' && cmd.mode) {
+              console.log(`[MoodleSync] Received command from extension: startSync(${cmd.mode})`);
+              window.__MOODLE_SYNC_API__.startSync(cmd.mode);
+            }
+          } catch (e) {
+            console.warn('[MoodleSync] Failed to parse bridge command:', e);
+          }
+        }
+      }
+    });
+    observer.observe(bridge, { attributes: true, attributeFilter: ['data-command'] });
+    console.log('[MoodleSync] Bridge command watcher active.');
+  }
+
+  (async function init() {
+    // Load config from window, DOM bridge, or IndexedDB
     const configLoaded = await loadConfig();
 
+    // Set API status
     if (configLoaded && CONFIG.courses.length > 0) {
-      log(`Sync engine v2.6 loaded. ${CONFIG.courses.length} courses configured.`);
-      log('Choose a mode to begin.');
+      window.__MOODLE_SYNC_API__.ready = true;
+      window.__MOODLE_SYNC_API__.needsConfig = false;
+      console.log(`[MoodleSync] Engine v3.0 initialized. ${CONFIG.courses.length} courses configured.`);
+      console.log('[MoodleSync] Call window.__MOODLE_SYNC_API__.startSync("seed") or "incremental" to begin.');
     } else {
-      log('No config found — showing setup form...');
-      showSetupForm();
+      window.__MOODLE_SYNC_API__.ready = false;
+      window.__MOODLE_SYNC_API__.needsConfig = true;
+      console.log('[MoodleSync] Engine v3.0 initialized. No config found.');
+      console.log('[MoodleSync] Config must be injected via window.__MOODLE_SYNC_CONFIG__ or set up via the extension options page.');
     }
+
+    // Start DOM bridge integration (for Chrome extension communication)
+    updateBridgeStatus();
+    updateBridgeLog();
+    setInterval(() => {
+      updateBridgeStatus();
+      updateBridgeLog();
+    }, 500);
+    setupBridgeCommandWatcher();
   })();
 
 })();

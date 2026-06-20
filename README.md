@@ -1,71 +1,53 @@
-# BGU Moodle Sync
+# Moodle Sync — Israeli Universities
 
-One-click download of all your BGU Moodle course materials into organized folders. Runs in your browser — no installation needed.
+One-click download of all your Moodle course materials into organized folders. Install the Chrome extension once and it works automatically on any Israeli university Moodle.
 
 ## What it does
 
 - Downloads every file from all your Moodle courses (lectures, exercises, assignments, exams, syllabi)
 - Organizes them into clean folders with sensible names
 - Merges numbered sections (e.g. "הרצאה 1", "הרצאה 2", ... into a single "הרצאות" folder)
+- Groups exam files by year, semester, and moed into separate subfolders
 - Handles Google Docs/Slides/Sheets links (exports as PDF/XLSX)
 - Handles Dropbox links
 - Extracts ZIP archives automatically
 - Removes duplicate files when both PDF and Office versions exist
-- Generates a README per course listing all downloaded files
+- Generates a per-course status Excel file (`סטטוס סנכרון.xlsx`) and a semester-level combined report
 - Generates an Excel log of anything it couldn't download (with reasons)
 - Supports incremental sync — after the first run, only downloads new/updated files
 
 ## What you need
 
-1. **Chrome** (with DevTools or the [Claude in Chrome](https://claude.ai) extension)
-2. **Logged into BGU Moodle** in Chrome (active SSO session)
-3. Your **Moodle course IDs** — the number in the URL when you open a course: `moodle.bgu.ac.il/moodle/course/view.php?id=`**`64674`**
+1. **Chrome** browser
+2. **Logged into your university's Moodle** in Chrome (active session)
 
-## Quick start (5 minutes)
+## Quick start — Chrome Extension (recommended)
 
-### Step 1: Create your download folder
+### Step 1: Install the extension
 
-Create a folder on your computer where you want course materials to live. For example:
+1. Download or clone the `bgu-moodle-sync-extension/` folder
+2. Open Chrome → `chrome://extensions/` → enable **Developer mode**
+3. Click **Load unpacked** → select the `bgu-moodle-sync-extension` folder
 
-```
-Desktop/
-  שנה ג׳/
-    סמסטר ב׳/
-```
+### Step 2: Visit your Moodle dashboard
 
-### Step 2: Run the engine
+1. Go to your university's Moodle and log in (click the login button even if the page looks logged in)
+2. The extension auto-detects your university and enrolled courses
 
-1. Open any page on `moodle.bgu.ac.il` in Chrome
-2. Open DevTools (F12 or Cmd+Option+I)
-3. Paste the entire contents of `moodle_sync.js` into the Console tab
-4. Press Enter
+### Step 3: Configure in Settings
 
-A blue sidebar appears on the right side of the page.
-
-### Step 3: Enter your courses
-
-Since this is your first run, the sidebar shows a setup form. Fill in:
-
-- **Semester identifier**: the text that appears in your course titles on Moodle (e.g. `סמ 2` for semester B, `סמ 1` for semester A)
-- **Semester folder name**: the semester folder inside the year folder you'll pick (e.g. `סמסטר ב׳`)
-- **Courses**: one per line, format: `COURSE_ID | Folder Name`
-
-Example:
-
-```
-64674 | הנדסת חשמל
-65670 | מימון
-64660 | רגרסיה
-```
-
-Click **Save Config & Continue**.
+1. Click the extension icon → **Settings**
+2. Your university and courses should be pre-filled from auto-detection
+3. Review the course list — toggle off any courses you don't want synced, edit folder names as needed
+4. Click **Save**
 
 ### Step 4: Run the seed download
 
-1. Click **Seed Run (Full)**
-2. A folder picker opens — select your **year folder** (e.g. `שנה ג׳`). The engine navigates into the semester subfolder automatically.
-3. Wait. The sidebar shows real-time progress. A full run of 5 courses takes about 2-3 minutes.
-4. When you see `SYNC COMPLETE`, you're done.
+1. Navigate to any page on your Moodle
+2. Click the extension icon → **Seed Run (Full)**
+3. A folder picker opens — select your **year folder** (e.g. `שנה ג׳`). The engine navigates into the semester subfolder automatically.
+4. A floating toast shows real-time progress. A full run of 5 courses takes about 2–3 minutes.
+5. When you see `SYNC COMPLETE`, you're done.
 
 ### Step 5: Check results
 
@@ -73,16 +55,16 @@ Open your semester folder. You should see:
 
 ```
 שנה ג׳/סמסטר ב׳/
-  .moodle_manifest.json       ← tracks what's been downloaded (don't delete)
-  moodle_sync_config.json     ← your courses and settings
-  קבצים שלא הורדו.xlsx        ← items that couldn't be downloaded (with reasons)
+  .moodle_manifest.json           ← tracks what's been downloaded (don't delete)
+  קבצים שלא הורדו.xlsx            ← items that couldn't be downloaded (with reasons)
+  סטטוס סנכרון - כל הקורסים.xlsx  ← combined sync status for all courses
   הנדסת חשמל/
-    README.md
+    סטטוס סנכרון.xlsx
     הרצאות/
     תרגולים/
     ...
   מימון/
-    README.md
+    סטטוס סנכרון.xlsx
     ...
 ```
 
@@ -90,32 +72,36 @@ Open your semester folder. You should see:
 
 Professors upload new files throughout the semester. To grab only the new stuff:
 
-1. Open Moodle in Chrome, paste `moodle_sync.js` in the console
-2. Click **Incremental Sync**
-3. Pick your year folder (the directory handle is cached after the first run, so this step is usually automatic)
-4. Done — only new files are downloaded
+1. Navigate to your Moodle in Chrome
+2. Click the extension icon → **Incremental Sync**
+3. Done — only new files are downloaded. The folder handle is cached after the first run.
 
 ## Next semester
 
-1. Open `moodle_sync_config.json` in any text editor
-2. Change `semesterCheck` to match the new semester (e.g. `"סמ 1"`)
-3. Change `rootPath` to the new semester folder name (e.g. `"סמסטר א׳"`) — you'll pick the year folder in the directory picker
-4. Replace the `courses` array with your new course IDs and folder names
-5. If using the scheduled task: update `semesterAbsolutePath` to the new semester folder on your machine
-6. Run Seed Run again
+1. Open the extension Settings
+2. Update **Semester identifier** and **Semester folder name**
+3. Replace courses with the new semester's course IDs (or use "Apply auto-detected courses" after visiting the new dashboard)
+4. Click **Save** → run **Seed Run** again
 
 ## Automated daily sync (optional, requires Claude Desktop)
 
 If you use [Claude Desktop](https://claude.ai) with the Claude in Chrome extension, you can set up a scheduled task that runs the incremental sync automatically every day. Ask Claude: "set up the Moodle scheduled sync" and it will configure everything.
 
+## Alternative: Console paste (no extension)
+
+You can also run the engine directly by pasting `moodle_sync.js` into Chrome DevTools (F12 → Console) on any Moodle page. This is useful for quick one-off syncs without installing the extension.
+
 ## Files in this repo
 
 | File | Purpose |
 |------|---------|
-| `moodle_sync.js` | The sync engine (v2.6, with safety patches S1–S11, Excel merge, download retry, progress bar). Paste into Chrome console. |
-| `moodle_sync_config.json` | Your personal config (courses, paths). **Not tracked in git** — create your own. The `semesterAbsolutePath` and `syncScriptPath` fields are only used by the scheduled task — update them to match your machine. |
+| `moodle_sync.js` | The sync engine (v3.0, with safety patches S1–S12). Paste into Chrome console or use the Chrome extension. |
+| `moodle_sync_config.json` | Your personal config (courses, paths). **Not tracked in git** — create your own. The `semesterAbsolutePath` and `syncScriptPath` fields are only used by the scheduled task. |
 | `moodle_sync_spec.md` | Full technical spec with all rules and edge cases. Read this if you want to understand or modify the engine. |
 | `moodle-course-setup-SKILL.md` | Claude Desktop skill file for guided setup. |
+| `bgu-moodle-sync-extension/` | Chrome extension (Manifest V3) — auto-injects the engine on Moodle pages. Supports 40+ Israeli institutions. |
+| `moodle_israel_research.md` | Research on all Israeli university Moodle instances — compatibility tiers, auth methods, URL patterns. |
+| `PROJECT_STATUS.md` | Project status, roadmap, and decisions. Read this to understand where the project is headed. |
 
 ## Limitations
 
@@ -131,7 +117,7 @@ If you use [Claude Desktop](https://claude.ai) with the Claude in Chrome extensi
 A: Yes — it runs in Chrome, which works on all three.
 
 **Q: Will this work with other universities?**
-A: It's built for BGU's Moodle instance. Other Moodle installations may have different DOM structures, but the core logic (scraping sections, resolving URLs, downloading files) is the same. You'd need to update the CSS selectors in the spec and possibly the base URL.
+A: A Chrome extension is being built to support all Israeli Moodle instances. See `bgu-moodle-sync-extension/` and `moodle_israel_research.md` for details. The core engine is university-agnostic — it uses the standard Moodle DOM structure. Only the config (URL, courses, semester naming) changes per institution.
 
 **Q: Is my Moodle password stored anywhere?**
 A: No. The engine uses your existing browser session cookie. It never sees or stores your password.

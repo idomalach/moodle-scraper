@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moodle Scraper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <img src="icons/icon48.png" alt="Moodle Scraper" class="logo">
+      <div class="header-text">
+        <h1>Moodle Scraper</h1>
+        <span class="version" id="version"></span>
+      </div>
+    </div>
+
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">Checking...</span>
+    </div>
+
+    <div class="config-summary" id="configSummary" style="display:none;">
+      <div class="config-row">
+        <span class="config-label">University</span>
+        <span class="config-value" id="configUniversity">—</span>
+      </div>
+      <div class="config-row">
+        <span class="config-label">Semester</span>
+        <span class="config-value" id="configSemester">—</span>
+      </div>
+      <div class="config-row">
+        <span class="config-label">Folder</span>
+        <span class="config-value folder-value" id="configFolder">
+          <span id="folderName">—</span>
+          <button id="btnChangeFolder" class="btn-link" title="Change folder">change</button>
+        </span>
+      </div>
+      <div class="config-section">
+        <span class="config-label">Courses</span>
+        <ul class="course-list" id="courseList"></ul>
+      </div>
+    </div>
+
+    <div class="detected-banner" id="detectedBanner" style="display:none; cursor:pointer;" title="Click to use these courses">
+      <span id="detectedText"></span>
+      <span class="detected-action">tap to apply</span>
+    </div>
+
+    <div class="no-config-msg" id="noConfigMsg" style="display:none;">
+      <p>No courses configured yet.<br>Open Settings to get started.</p>
+    </div>
+
+    <div class="sync-buttons" id="syncButtons" style="display:none;">
+      <button id="btnSeed" class="btn btn-seed" disabled>
+        Seed Run (Full)
+      </button>
+      <button id="btnIncremental" class="btn btn-incremental" disabled>
+        Incremental Sync
+      </button>
+    </div>
+
+    <div class="actions">
+      <button id="btnOptions" class="btn btn-secondary">
+        Settings
+      </button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
