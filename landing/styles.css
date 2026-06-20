@@ -303,6 +303,8 @@ strong, b { font-weight: 800; color: var(--navy); }
   box-shadow: var(--shadow);
   font-size: 16.5px;
 }
+.usebar-tip { background: linear-gradient(135deg, #fff7e8, #fffdf6); border-color: #ffe1a6; }
+.usebar-tip .num { background: linear-gradient(135deg, #ffb020, #ff9500); box-shadow: 0 5px 12px rgba(255,149,0,0.35); }
 
 /* ── Privacy ───────────────────────────── */
 .privacy { text-align: center; }
