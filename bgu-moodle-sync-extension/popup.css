@@ -23,20 +23,14 @@ body {
 .header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
 }
 
 .logo {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-}
-
-.header-text h1 {
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.2;
+  height: 34px;
+  width: auto;
 }
 
 .version {
@@ -53,6 +47,7 @@ body {
   border-radius: 10px;
   background: #f2f2f7;
   margin-bottom: 14px;
+  direction: rtl; /* Hebrew status text — align to the right */
 }
 
 .status-dot {
@@ -188,6 +183,7 @@ body {
   margin-bottom: 12px;
   cursor: pointer;
   transition: background 0.15s;
+  direction: rtl; /* Hebrew banner — align to the right */
 }
 
 .detected-banner:hover {
@@ -199,7 +195,7 @@ body {
   font-weight: 600;
   text-decoration: underline;
   white-space: nowrap;
-  margin-left: 8px;
+  margin-inline-start: 8px;
 }
 
 /* ── Sync Buttons ────────────────────────── */

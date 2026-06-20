@@ -14,6 +14,9 @@
 
   let pollInterval = null;
 
+  // Hebrew label for a sync mode (matches the button names).
+  const modeLabel = (m) => m === 'seed' ? 'הורדה ראשונית' : m === 'incremental' ? 'סנכרון' : m;
+
   async function refreshStatus() {
     let config = null;
     try {
@@ -30,8 +33,8 @@
         if (!sameSet) {
           $('#detectedBanner').style.display = '';
           const label = newCourses.length === detected.length
-            ? `${detected.length} courses detected`
-            : `${newCourses.length} new course${newCourses.length !== 1 ? 's' : ''} detected`;
+            ? `זוהו ${detected.length} קורסים`
+            : (newCourses.length === 1 ? 'זוהה קורס חדש אחד' : `זוהו ${newCourses.length} קורסים חדשים`);
           $('#detectedText').textContent = label;
         } else {
           $('#detectedBanner').style.display = 'none';
@@ -40,7 +43,7 @@
 
       // Folder name
       const folderName = stored.savedFolderName;
-      $('#folderName').textContent = folderName || 'Not set';
+      $('#folderName').textContent = folderName || 'לא נבחר';
     } catch (e) {}
 
     // Config summary
@@ -73,19 +76,19 @@
     try {
       tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     } catch (e) {
-      setStatus('error', 'Cannot access tabs');
+      setStatus('error', 'אין גישה ללשוניות');
       return;
     }
 
     if (!tabs || tabs.length === 0) {
-      setStatus('inactive', 'No active tab');
+      setStatus('inactive', 'אין לשונית פעילה');
       return;
     }
 
     const tab = tabs[0];
 
     if (!tab.url || !isMoodleUrl(tab.url, config)) {
-      setStatus('inactive', 'Not a Moodle page');
+      setStatus('inactive', 'לא דף מוודל');
       $('#syncButtons').style.display = 'none';
       return;
     }
@@ -94,29 +97,29 @@
     try {
       const status = await chrome.tabs.sendMessage(tab.id, { action: 'getStatus' });
       if (status.notInjected) {
-        setStatus('inactive', 'Engine not loaded — refresh page');
+        setStatus('inactive', 'המנוע לא נטען — רעננו את הדף');
         $('#syncButtons').style.display = 'none';
       } else if (status.running) {
-        setStatus('active', `Syncing (${status.mode})...`);
+        setStatus('active', `מסנכרן (${modeLabel(status.mode)})...`);
         $('#syncButtons').style.display = '';
         enableSyncButtons(false);
         startPolling(tab.id);
       } else if (status.ready) {
-        setStatus('active', 'Ready');
+        setStatus('active', 'מוכן');
         $('#syncButtons').style.display = '';
         enableSyncButtons(true);
       } else if (status.needsConfig) {
-        setStatus('inactive', 'No config — open Settings');
+        setStatus('inactive', 'אין הגדרות — פתחו הגדרות');
         $('#syncButtons').style.display = 'none';
       } else {
-        setStatus('inactive', 'Engine loading...');
+        setStatus('inactive', 'המנוע נטען...');
         $('#syncButtons').style.display = 'none';
       }
     } catch (e) {
       if (tab.url && isMoodleUrl(tab.url, config)) {
-        setStatus('inactive', 'Refresh the Moodle page to activate');
+        setStatus('inactive', 'רעננו את דף המוודל להפעלה');
       } else {
-        setStatus('inactive', 'Not a Moodle page');
+        setStatus('inactive', 'לא דף מוודל');
       }
       $('#syncButtons').style.display = 'none';
     }
@@ -138,7 +141,7 @@
       try {
         const status = await chrome.tabs.sendMessage(tabId, { action: 'getStatus' });
         if (status.running) {
-          setStatus('active', `Syncing (${status.mode})...`);
+          setStatus('active', `מסנכרן (${modeLabel(status.mode)})...`);
         } else {
           clearInterval(pollInterval);
           pollInterval = null;
@@ -182,15 +185,15 @@
       if (tabs.length > 0) {
         const resp = await chrome.tabs.sendMessage(tabs[0].id, { action: 'startSync', mode });
         if (resp && resp.success) {
-          setStatus('active', `Starting ${mode} sync...`);
+          setStatus('active', `מתחיל ${modeLabel(mode)}...`);
           startPolling(tabs[0].id);
         } else {
-          setStatus('error', resp?.error || 'Failed to start sync');
+          setStatus('error', resp?.error || 'הפעלת הסנכרון נכשלה');
           enableSyncButtons(true);
         }
       }
     } catch (e) {
-      setStatus('error', 'Cannot reach content script');
+      setStatus('error', 'לא ניתן להתחבר לדף');
       enableSyncButtons(true);
     }
   }
