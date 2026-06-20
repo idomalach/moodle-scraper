@@ -157,6 +157,7 @@
         semesterCheck,
         detectedAt: new Date().toISOString(),
         hostname: window.location.hostname,
+        universityName: detectUniversityName(window.location.hostname),
       };
 
       await chrome.storage.sync.set({ detectedCourses: detectedData });
@@ -182,6 +183,16 @@
         };
         await chrome.storage.sync.set({ moodleSyncConfig: autoConfig });
         console.log('[MoodleSync Extension] Auto-populated config from dashboard');
+      } else if (!existing.moodleSyncConfig.universityName) {
+        // Backfill a missing university name on an existing config — some setup
+        // paths didn't record it, so the popup fell back to showing the raw
+        // domain. Self-heals on the next dashboard visit.
+        const uni = detectUniversityName(window.location.hostname);
+        if (uni) {
+          existing.moodleSyncConfig.universityName = uni;
+          await chrome.storage.sync.set({ moodleSyncConfig: existing.moodleSyncConfig });
+          console.log('[MoodleSync Extension] Backfilled university name:', uni);
+        }
       }
     } catch (e) {
       console.warn('[MoodleSync Extension] Failed to store detected courses:', e);

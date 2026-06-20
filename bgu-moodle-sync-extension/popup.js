@@ -227,7 +227,7 @@
       const newConfig = {
         baseUrl: detected.baseUrl || existing.baseUrl || '',
         basePath: detected.basePath || existing.basePath || '/',
-        universityName: existing.universityName || detected.hostname || '',
+        universityName: existing.universityName || detected.universityName || detected.hostname || '',
         semesterCheck: detected.semesterCheck || existing.semesterCheck || '',
         rootPath: existing.rootPath || '',
         courses: detected.courses.map(c => ({

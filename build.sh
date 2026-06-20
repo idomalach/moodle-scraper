@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
 
-VERSION="3.0.2"
+VERSION="3.0.3"
 ZIP="moodle-scraper-v${VERSION}.zip"
 
 rm -f moodle-scraper-v*.zip

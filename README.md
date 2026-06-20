@@ -46,7 +46,7 @@ From source:
 ./build.sh
 ```
 
-Produces `moodle-scraper-v3.0.2.zip` (gitignored) and copies it to `landing/assets/` for the website download.
+Produces `moodle-scraper-v3.0.3.zip` (gitignored) and copies it to `landing/assets/` for the website download.
 
 ## Limitations
 

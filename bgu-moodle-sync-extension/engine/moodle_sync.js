@@ -1614,42 +1614,47 @@
     log('');
 
     try {
-      // S5 — Login enforcement: parameterized login detection
+      // S5 — Login enforcement.
       log('Step 0: Ensuring login...');
 
-      // Step 1: Check CSS selectors from LOGIN_SELECTORS
-      const loginSelectors = CONFIG.loginSelectors || ['a[href*="login/index.php"]', 'a.btn-login', 'a[data-title="login,moodle"]'];
-      for (const selector of loginSelectors) {
-        const loginBtn = document.querySelector(selector);
-        if (loginBtn) {
-          log('  Found login button (selector: ' + selector + ') — clicking...');
-          loginBtn.click();
-          await delay(3000);
-          await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
-          return;
-        }
-      }
+      // Determine login status FIRST. Moodle pages routinely include a
+      // login/index.php link (and "Log in" text) even when the user IS logged
+      // in — in a footer, a "log in as" control, or a guest-access block. So we
+      // must NOT blindly click it: on some institutions (e.g. HUJI) that link
+      // points at an external SSO / exam system, and clicking it navigates the
+      // page away, killing the run and leaving the sync lock stuck. Only attempt
+      // a login click when we are genuinely logged OUT.
+      const isLoggedIn =
+        (typeof M !== 'undefined' && M.cfg && M.cfg.userId && M.cfg.userId > 1) ||
+        !!document.querySelector('.usermenu, .usertext, #user-menu-toggle, .logininfo .username, [data-region="user-menu"], .userbutton');
 
-      // Step 2: Scan all <a> elements for text matching LOGIN_TEXT_MATCHES
-      const loginTextMatches = CONFIG.loginTextMatches || ['התחברות', 'Log in', 'כניסה', 'Sign in'];
-      const allLinks = document.querySelectorAll('a');
-      for (const link of allLinks) {
-        const linkText = link.textContent.trim();
-        if (loginTextMatches.includes(linkText)) {
-          log('  Found login link (' + linkText + ') — clicking...');
-          link.click();
-          await delay(3000);
-          await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
-          return;
-        }
-      }
-
-      // Verify we're actually logged in by checking for user menu
-      const userMenu = document.querySelector('.usermenu, .usertext, #user-menu-toggle, .logininfo .username');
-      if (!userMenu) {
-        log('  WARNING: Could not confirm login status — proceeding cautiously');
+      if (isLoggedIn) {
+        log('  Login confirmed.');
       } else {
-        log('  Login confirmed');
+        // Logged out — try the configured login button, then a text match, then
+        // abort so the user can finish logging in and re-run.
+        const loginSelectors = CONFIG.loginSelectors || ['a[href*="login/index.php"]', 'a.btn-login', 'a[data-title="login,moodle"]'];
+        for (const selector of loginSelectors) {
+          const loginBtn = document.querySelector(selector);
+          if (loginBtn) {
+            log('  Not logged in — opening login (selector: ' + selector + ')...');
+            loginBtn.click();
+            await delay(3000);
+            await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
+            return;
+          }
+        }
+        const loginTextMatches = CONFIG.loginTextMatches || ['התחברות', 'Log in', 'כניסה', 'Sign in'];
+        for (const link of document.querySelectorAll('a')) {
+          if (loginTextMatches.includes(link.textContent.trim())) {
+            log('  Not logged in — opening login (' + link.textContent.trim() + ')...');
+            link.click();
+            await delay(3000);
+            await safetyAbort('🔑 Not logged in — please log in and re-run sync.');
+            return;
+          }
+        }
+        log('  WARNING: Could not confirm login status — proceeding cautiously.');
       }
 
       // Step 1: Get directory handle (S3 — try cached handle first)
