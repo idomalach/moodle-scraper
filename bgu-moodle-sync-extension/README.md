@@ -12,7 +12,7 @@ Chrome extension that auto-injects the Moodle Scraper engine into any Israeli un
 
 ## First-Time Setup
 
-1. Navigate to your Moodle dashboard and log in (always click the login button, even if the page looks logged in)
+1. Navigate to your Moodle dashboard and log in normally
 2. The extension auto-detects your university and enrolled courses
 3. Click the extension icon → **Settings**
 4. Review the pre-filled setup — your university, semester, and courses should already be detected
@@ -43,7 +43,7 @@ Any other Moodle instance can be added via the "Custom / Other" option.
 3. Visit the new semester's Moodle dashboard to auto-detect new courses, or add them manually
 4. Use "Apply auto-detected courses" to import detected courses, or edit the list manually
 5. Click **Save**
-6. Go to Moodle → click **Seed Run (Full)** in the popup
+6. Go to Moodle → click **הורדה ראשונית** (Initial Download) in the popup
 
 ## Sharing with a Friend
 
@@ -65,8 +65,8 @@ The extension has three layers:
 ## Troubleshooting
 
 **Sync doesn't start:**
-- Make sure you're logged into Moodle (click "התחברות" even if the page looks logged-in)
-- Try clicking the extension icon → **Re-inject Engine**
+- Make sure you're logged into Moodle.
+- Reload the Moodle page so the engine re-injects, then try again.
 - Check the browser console (F12) for errors
 
 **"Blocked loading of script" error:**
@@ -78,7 +78,7 @@ The extension has three layers:
 
 **Extension not activating on my university's Moodle:**
 - Your university URL might not be in the preset list. Go to Settings → select "Custom / Other" → enter your Moodle URL → Save
-- If the URL pattern isn't in the manifest's `content_scripts` matches, the extension won't auto-inject. For unlisted universities, you can use the popup's "Re-inject Engine" button after navigating to Moodle. For a permanent fix, add the URL pattern to `manifest.json` → `content_scripts` → `matches` and reload the extension.
+- If the URL pattern isn't in the manifest's `content_scripts` matches, the extension won't auto-inject. For a permanent fix, add the URL pattern to `manifest.json` → `content_scripts` → `matches` and reload the extension.
 
 ## Files
 

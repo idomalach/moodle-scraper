@@ -392,7 +392,7 @@ The entire download pipeline is encoded in a single JavaScript file (`moodle_syn
 
 1. Install the Chrome extension and navigate to any Moodle page in Chrome (must be logged in).
 2. The content script loads the bundled engine (`engine/moodle_sync.js`) automatically. No manual injection is required.
-3. The engine initializes and exposes `window.__MOODLE_SYNC_API__` with `startSync(mode)`, `getStatus()`, and `getLog()`. The popup provides **Seed Run (Full)** and **Incremental Sync** buttons. Progress is shown in a floating toast in the bottom-right corner of the page.
+3. The engine initializes and exposes `window.__MOODLE_SYNC_API__` with `startSync(mode)`, `getStatus()`, and `getLog()`. The popup provides **הורדה ראשונית** (Initial Download / seed) and **סנכרון** (Sync / incremental) buttons. Progress is shown in a floating toast in the bottom-right corner of the page.
 4. On the first run, a folder picker opens (via a toast button that provides the required user gesture) - point it to the **year folder** (e.g. `שנה ג׳`). The engine navigates into the semester subfolder (e.g. `סמסטר ב׳`) automatically via `rootPath`. The handle is cached in IndexedDB (S3 patch), so subsequent runs skip the picker.
 5. The engine scrapes all active courses (those not toggled off via `course.disabled`), resolves URLs, expands folders, downloads files, saves the manifest, generates per-course status XLS files, and produces the Excel log. All automatically.
 
@@ -408,7 +408,7 @@ The entire download pipeline is encoded in a single JavaScript file (`moodle_syn
    - `mod/assign` → check for Pattern B (embedded `pluginfile.php` links), queue found files.
    - Silent-skip types (`label`, `page`, `zoom`, `lti`, `forum`, `choicegroup`) → ignore.
 5. **Incremental filter** (incremental mode only) - remove items already in the manifest. Uses smart HEAD optimization: if a course's scraped cmid set is identical to its manifest cmid set, all HEAD requests for that course are skipped entirely (no items changed). Only courses with new or removed items trigger HEAD checks for update detection. This reduces HEAD requests from O(total items) to O(changed items) on typical days.
-6. **Download** - fetch each queued file (with up to 3 retries and exponential backoff), detect extension from headers, normalize filename, try ZIP extraction (JSZip from CDN), write to correct subfolder via File System Access API. Handle duplicates by appending `(2)`, `(3)`, etc. A progress bar shows real-time completion percentage.
+6. **Download** - fetch each queued file (with up to 3 retries and exponential backoff), detect extension from headers, normalize filename, try ZIP extraction (JSZip, bundled in the extension), write to correct subfolder via File System Access API. Handle duplicates by appending `(2)`, `(3)`, etc. A progress bar shows real-time completion percentage.
 7. **Save manifest** - write updated manifest with section mappings, file sizes, timestamps.
 8. **Generate outputs** - write `סטטוס סנכרון.xlsx` per course (last sync time + list of items not downloaded), generate `סטטוס סנכרון - כל הקורסים.xlsx` at the semester level, and merge new entries into `קבצים שלא הורדו.xlsx` (SheetJS, bundled in extension or loaded from CDN) preserving previous entries and deduplicating by URL+Name.
 
@@ -494,7 +494,7 @@ In incremental mode, after filtering the download queue: if the queue length exc
 
 ### S5 - Login enforcement
 
-Before any sync operation, the engine checks for login buttons (`התחברות` / `Log in`) on the page and clicks them if found. It also checks for the user menu element to confirm login status. This addresses a subtle issue where the Moodle page can look like a dashboard (cached HTML) even when the session has expired. Running sync without login would produce empty course pages or redirect errors.
+Before any sync operation, the engine first confirms login status (`M.cfg.userId > 1` or a user-menu element). Only when the user is logged OUT does it click a login button (`התחברות` / `Log in`) and then abort so the user can finish logging in. It must NOT click a login link when already logged in: on some institutions the login link points to an external SSO / exam system, so clicking it navigates the page away mid-run (this broke HUJI; fixed in v3.0.3). The login-status check still catches the subtle case where a cached dashboard looks logged-in but the session has expired — running sync without login would otherwise produce empty course pages or redirect errors.
 
 ### S6 - Config backup in IndexedDB
 

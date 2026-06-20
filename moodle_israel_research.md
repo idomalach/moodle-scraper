@@ -154,7 +154,7 @@ For each institution, I searched for `"[name] moodle"`, `"[name] LMS"`, `site:mo
 | Technion | CAS-like (credential-based) | Browser extension exists to automate login; login page at standard path | `/login/index.php` → redirects to credential form | Students auto-enrolled per semester |
 | TAU | SAML | SAML login endpoint confirmed (`/auth/saml/index.php`); users enter TAU credentials | `/auth/saml/index.php` | Site policy agreement on first login |
 | BIU | Microsoft 365 SSO | Login via My BIU portal (Microsoft 365); single login grants access to Inbar, Moodle, library | Portal-based → lemida.biu.ac.il | Unified M365 authentication |
-| BGU | Standard Moodle auth | "התחברות" button on page; engine S5 rule clicks it | `/login/index.php` | Session can look active when expired (documented in engine spec) |
+| BGU | Standard Moodle auth | "התחברות" button on page; engine S5 clicks it only when logged out (v3.0.3+) | `/login/index.php` | Session can look active when expired (documented in engine spec) |
 | Haifa | SAML2 | SSO with ID number + SSO password; SAML2 endpoint confirmed | `/auth/saml2/login.php` | Different mw## instances per academic year |
 | Ariel | ⚠️ Needs verification | Login at moodlearn.ariel.ac.il | ⚠️ Needs verification | — |
 | Reichman | Portal-based | Login via My RU portal (my.idc.ac.il); then routed to Moodle | Portal → moodle.runi.ac.il | Yearly Moodle instances |
