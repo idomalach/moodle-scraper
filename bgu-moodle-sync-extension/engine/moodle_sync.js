@@ -196,9 +196,10 @@
   function normalizeName(name) {
     if (!name) return 'unnamed';
     let n = name;
-    // Strip invisible Unicode
+    // Strip invisible Unicode + control chars (control chars are illegal on Windows)
     n = n.replace(/[\u200F\u200E\u200B\u200C\u200D\u061C\uFEFF]/g, '');
-    // Replace illegal filename chars
+    n = n.replace(/[\x00-\x1F]/g, '');
+    // Replace chars illegal on Windows/macOS filesystems
     n = n.replace(/[\/\\:*?"<>|]/g, '-');
     // Collapse multiple spaces
     n = n.replace(/\s+/g, ' ');
@@ -206,8 +207,11 @@
     n = n.replace(/[_.!,;:]+$/g, '');
     // Trim
     n = n.trim();
-    // Truncate if > 80 chars
-    if (n.length > 80) n = n.substring(0, 77) + '...';
+    // Truncate if > 80 chars. No trailing "..." \u2014 Windows forbids names ending
+    // in a dot or space.
+    if (n.length > 80) n = n.substring(0, 80).replace(/[ ._]+$/g, '').trim();
+    // Avoid Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(n)) n = '_' + n;
     return n || 'unnamed';
   }
 
@@ -927,11 +931,14 @@
     if (!seg) return '';
     let s = seg
       .replace(/[‏‎​‌‍؜﻿]/g, '') // invisible Unicode
-      .replace(/[\\:*?"<>|]/g, '-')   // illegal chars (/ already split out by caller)
+      .replace(/[\x00-\x1F]/g, '')    // control chars (illegal on Windows)
+      .replace(/[\\:*?"<>|]/g, '-')   // Windows-reserved chars (/ already split out by caller)
       .replace(/\s+/g, ' ')
       .replace(/[ .]+$/g, '')          // Windows disallows trailing dots/spaces in dir names
       .trim();
-    if (s.length > 80) s = s.substring(0, 80).trim();
+    if (s.length > 80) s = s.substring(0, 80).replace(/[ .]+$/g, '').trim();
+    // Avoid Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(s)) s = '_' + s;
     return s;
   }
 
