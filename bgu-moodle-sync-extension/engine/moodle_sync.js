@@ -121,12 +121,12 @@
   };
 
   // ============================================================
-  // CDN LIBRARY LOADER
+  // BUNDLED LIBRARY LOADER
   // ============================================================
 
-  async function loadCdnLibrary(name, url, globalName) {
+  async function loadLibrary(name, url, globalName) {
     if (window[globalName]) return window[globalName];
-    log(`Loading ${name} from CDN...`);
+    log(`Loading ${name}...`);
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = url;
@@ -138,7 +138,7 @@
           reject(new Error(`${name} loaded but ${globalName} not found on window`));
         }
       };
-      script.onerror = () => reject(new Error(`Failed to load ${name} from CDN`));
+      script.onerror = () => reject(new Error(`Failed to load ${name}`));
       document.head.appendChild(script);
     });
   }
@@ -146,25 +146,17 @@
   async function ensureSheetJS() {
     if (window.XLSX) return window.XLSX;
     const extBase = window.__MOODLE_SYNC_LIB_BASE__;
-    if (extBase) {
-      try {
-        await loadCdnLibrary('SheetJS', extBase + 'lib/xlsx.full.min.js', 'XLSX');
-        if (window.XLSX) return window.XLSX;
-      } catch (e) { /* fall through to CDN */ }
-    }
-    return loadCdnLibrary('SheetJS', 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js', 'XLSX');
+    if (!extBase) throw new Error('SheetJS unavailable: extension library base not set');
+    await loadLibrary('SheetJS', extBase + 'lib/xlsx.full.min.js', 'XLSX');
+    return window.XLSX;
   }
 
   async function ensureJSZip() {
     if (window.JSZip) return window.JSZip;
     const extBase = window.__MOODLE_SYNC_LIB_BASE__;
-    if (extBase) {
-      try {
-        await loadCdnLibrary('JSZip', extBase + 'lib/jszip.min.js', 'JSZip');
-        if (window.JSZip) return window.JSZip;
-      } catch (e) { /* fall through to CDN */ }
-    }
-    return loadCdnLibrary('JSZip', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'JSZip');
+    if (!extBase) throw new Error('JSZip unavailable: extension library base not set');
+    await loadLibrary('JSZip', extBase + 'lib/jszip.min.js', 'JSZip');
+    return window.JSZip;
   }
 
   // ============================================================
