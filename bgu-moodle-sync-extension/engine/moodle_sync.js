@@ -112,6 +112,7 @@
     results: { downloaded: 0, failed: 0, skipped: 0, newItems: 0, updated: 0 },
     log: [],
     running: false,
+    holdsLock: false,     // whether THIS tab currently holds the persistent sync lock
     toastEl: null,        // floating toast UI element
     // Progress tracking
     progressPercent: 0,
@@ -1203,8 +1204,9 @@
       const age = Date.now() - new Date(existing.startedAt).getTime();
       if (age < STALE_LOCK_THRESHOLD_MS) {
         // Recent lock — another tab may be running
+        const mins = Math.max(1, Math.ceil((STALE_LOCK_THRESHOLD_MS - age) / 60000));
         log(`  ⚠️ Sync lock held since ${existing.startedAt} (${Math.round(age / 1000)}s ago) — refusing to start.`);
-        log('  If no other sync is running, wait a few minutes or reload the page.');
+        log(`  Reloading the page does NOT clear this lock. If no other sync is actually running, use "Start anyway", or it auto-clears in ~${mins} min.`);
         return false;
       }
       // Stale lock — previous run was interrupted
@@ -1212,10 +1214,12 @@
       log('  Previous sync was likely interrupted. Clearing lock and proceeding.');
     }
     await idbSet('syncLock', { running: true, startedAt: new Date().toISOString(), mode });
+    state.holdsLock = true;
     return true;
   }
 
   async function releaseSyncLock() {
+    state.holdsLock = false;
     await idbSet('syncLock', { running: false, clearedAt: new Date().toISOString() });
   }
 
@@ -1583,16 +1587,28 @@
 
     // S9 — Acquire persistent sync lock (survives tab close) — skip for dry runs
     if (!dryRun) {
-      const lockAcquired = await acquireSyncLock(mode);
+      let lockAcquired = await acquireSyncLock(mode);
       if (!lockAcquired) {
-        updateToast('🔒 Another sync is in progress. Wait for it to finish.', 0);
+        // Don't dead-end on a possibly-stale lock — offer an explicit override.
+        if (!state.toastEl) createToast();
         const titleEl = state.toastEl && state.toastEl.querySelector('span');
-        if (titleEl) titleEl.textContent = 'Sync Blocked';
-        log('Cannot start sync — another sync may be in progress.');
-        log('If this is wrong, wait 10 minutes for the stale lock to auto-clear.');
-        await delay(6000);
-        removeToast();
-        return;
+        if (titleEl) titleEl.textContent = 'Sync may be running';
+        log('A sync lock is held — offering a "Start anyway" override.');
+        const proceed = await confirmStartAnywayViaToast();
+        if (!proceed) {
+          log('Sync not started — lock held and override declined.');
+          removeToast();
+          return;
+        }
+        // Override: clear the (likely stale) lock and re-acquire it for this run.
+        log('User chose "Start anyway" — clearing the existing sync lock.');
+        await releaseSyncLock();
+        lockAcquired = await acquireSyncLock(mode);
+        if (!lockAcquired) {
+          log('Could not acquire the lock even after override — aborting.');
+          removeToast();
+          return;
+        }
       }
     }
 
@@ -1716,6 +1732,13 @@
       let semHandle = state.rootHandle;
       const pathParts = CONFIG.rootPath.split('/').filter(p => p.length > 0);
       for (const part of pathParts) {
+        // Avoid double-nesting: if the picked folder already IS this segment
+        // (e.g. the user picked ".../סמסטר ב׳" and rootPath is also "סמסטר ב׳"),
+        // don't create a redundant nested copy (…/סמסטר ב׳/סמסטר ב׳).
+        if (semHandle.name === part) {
+          log(`  Skipping redundant path segment "${part}" — picked folder already matches it`);
+          continue;
+        }
         semHandle = await semHandle.getDirectoryHandle(part, { create: true });
       }
       state.semesterHandle = semHandle;
@@ -1746,19 +1769,30 @@
         const totalManifestItems = Object.values(state.manifest)
           .reduce((sum, c) => sum + (c.items ? Object.keys(c.items).length : 0), 0);
         if (totalManifestItems === 0) {
-          await safetyAbort('🛑 No manifest found — run a Seed sync first before using Incremental.');
+          await safetyAbort('🛑 No tracking file found for this folder — either this is your first run, or the destination folder/semester changed since you seeded. Run Seed (הורדה ראשונית) to build it; if your files were downloaded elsewhere, re-pick that folder instead.');
           return;
         }
       }
 
-      // S8 — Abort seed into populated folder (check DISK, not manifest)
+      // S8 — Abort a seed only into folders whose courses the manifest still
+      // TRACKS. Orphaned course folders (on disk but absent from the manifest —
+      // because the tracking file was lost, or the destination folder/semester
+      // changed since seeding) are safe to overwrite, so Seed is allowed to
+      // proceed and rebuild. This is what breaks the "Incremental says run Seed /
+      // Seed says use Incremental" deadlock: in that state the folders aren't in
+      // the manifest, so Seed goes through and restores a correct tracking file.
       if (mode === 'seed') {
-        // Check if any course folders actually exist on disk
+        // Folder names the manifest actually tracks with real downloaded content.
+        const trackedFolderNames = new Set(
+          Object.values(state.manifest)
+            .filter(c => c && c.items && Object.values(c.items).some(it => it && it.status !== 'skipped'))
+            .flatMap(c => [c.folderName, c.courseName].filter(Boolean))
+        );
         const existingFolderNames = [];
         const configFolderNames = new Set(CONFIG.courses.map(c => c.folderName));
         try {
           for await (const [name, handle] of state.semesterHandle.entries()) {
-            if (handle.kind === 'directory' && configFolderNames.has(name)) {
+            if (handle.kind === 'directory' && configFolderNames.has(name) && trackedFolderNames.has(name)) {
               existingFolderNames.push(name);
             }
           }
@@ -1766,14 +1800,16 @@
 
         if (existingFolderNames.length > 0) {
           const listStr = existingFolderNames.map(n => `  • ${n}`).join('\n');
-          await safetyAbort(`🛑 These courses already have downloaded content:\n${listStr}\n\nTo re-download from scratch, delete those folders first, then run Seed again.\nTo update existing content, use Incremental Sync.`);
+          await safetyAbort(`🛑 These courses are already downloaded and tracked here:\n${listStr}\n\nTo update them, use Incremental Sync (סנכרון).\nTo re-download from scratch, delete those folders first, then run Seed.`);
           return;
         }
-        // Disk is clean — clear any stale manifest so we start fresh
+        // No tracked course content here — either a clean folder, or orphaned
+        // folders with no matching tracking record. Clear any stale manifest so
+        // the seed rebuilds a correct one as it downloads.
         const totalManifestItems = Object.values(state.manifest)
           .reduce((sum, c) => sum + (c.items ? Object.keys(c.items).length : 0), 0);
         if (totalManifestItems > 0) {
-          log(`  Seed run: disk is clean but manifest has ${totalManifestItems} stale items — clearing manifest`);
+          log(`  Seed run: no tracked content here, but manifest has ${totalManifestItems} stale items — clearing manifest to rebuild`);
           state.manifest = {};
         }
       }
@@ -2095,7 +2131,7 @@
         // S4 — Download count safety valve
         const totalScraped = allItems.length;
         if (filtered.length > 10 && totalScraped > 0 && filtered.length > totalScraped * 0.5) {
-          await safetyAbort(`🛑 ${filtered.length}/${totalScraped} files queued (>50%) — looks like a full re-download. Run Seed instead.`);
+          await safetyAbort(`🛑 ${filtered.length}/${totalScraped} files have no tracking record for this folder — the tracking file wasn't found where these were seeded (the destination folder or semester likely changed). Run Seed (הורדה ראשונית) to rebuild it: your existing files will be refreshed and tracking restored. If your downloads live in a different folder, re-pick that one instead.`);
           return;
         }
         // Removal detection: flag manifest items no longer on Moodle
@@ -2424,7 +2460,10 @@
         <span style="font-weight: 600;">Syncing...</span>
         <button id="moodle-sync-toast-close" style="background: none; border: none; color: white; cursor: pointer; font-size: 16px; padding: 0;">×</button>
       </div>
-      <div id="moodle-sync-toast-text" style="margin-bottom: 8px; height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Starting sync...</div>
+      <div style="display: flex; align-items: flex-start; gap: 6px; margin-bottom: 8px;">
+        <div id="moodle-sync-toast-text" style="flex: 1; min-width: 0; height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Starting sync...</div>
+        <button id="moodle-sync-toast-expand" title="Show full message" style="background: none; border: none; color: rgba(255,255,255,0.7); cursor: pointer; font-size: 13px; line-height: 20px; padding: 0 2px; flex-shrink: 0;">⌄</button>
+      </div>
       <div style="background: rgba(255, 255, 255, 0.2); border-radius: 4px; height: 4px; margin-bottom: 4px;">
         <div id="moodle-sync-toast-progress" style="background: #1565C0; height: 100%; border-radius: 4px; width: 0%; transition: width 0.3s;"></div>
       </div>
@@ -2438,6 +2477,37 @@
       e.preventDefault();
       removeToast();
     };
+
+    // "See more" — expand/collapse long messages that would otherwise be
+    // clipped to a single line with an ellipsis.
+    const expandBtn = document.getElementById('moodle-sync-toast-expand');
+    const expandTextEl = document.getElementById('moodle-sync-toast-text');
+    if (expandBtn && expandTextEl) {
+      expandBtn.onclick = (e) => {
+        e.preventDefault();
+        const collapsed = expandTextEl.style.whiteSpace !== 'normal';
+        if (collapsed) {
+          expandTextEl.style.whiteSpace = 'normal';
+          expandTextEl.style.height = 'auto';
+          expandTextEl.style.maxHeight = '40vh';
+          expandTextEl.style.overflowY = 'auto';
+          expandTextEl.style.textOverflow = 'clip';
+          expandTextEl.style.wordBreak = 'break-word';
+          expandBtn.textContent = '⌃';
+          expandBtn.title = 'Collapse message';
+        } else {
+          expandTextEl.style.whiteSpace = 'nowrap';
+          expandTextEl.style.height = '20px';
+          expandTextEl.style.maxHeight = '';
+          expandTextEl.style.overflow = 'hidden';
+          expandTextEl.style.overflowY = '';
+          expandTextEl.style.textOverflow = 'ellipsis';
+          expandTextEl.style.wordBreak = '';
+          expandBtn.textContent = '⌄';
+          expandBtn.title = 'Show full message';
+        }
+      };
+    }
   }
 
   function updateToast(text, percent) {
@@ -2553,6 +2623,49 @@
       e.preventDefault();
       removeToast();
     };
+  }
+
+  /**
+   * When the persistent sync lock is held by a (possibly stale) run, show an
+   * explicit override in the toast instead of dead-ending. Resolves true if the
+   * user chooses to start anyway, false if they cancel.
+   */
+  function confirmStartAnywayViaToast() {
+    return new Promise((resolve) => {
+      if (!state.toastEl) createToast();
+      const textEl = document.getElementById('moodle-sync-toast-text');
+      if (textEl) textEl.textContent = 'A sync may already be running in another tab. If you are sure none is, you can start anyway.';
+
+      // Hide the progress bar/percent while prompting
+      const progressBar = state.toastEl.querySelector('#moodle-sync-toast-progress');
+      const percentEl = document.getElementById('moodle-sync-toast-percent');
+      if (progressBar) progressBar.parentElement.style.display = 'none';
+      if (percentEl) percentEl.style.display = 'none';
+
+      const row = document.createElement('div');
+      row.id = 'moodle-sync-lock-confirm';
+      row.style.cssText = 'display: flex; gap: 6px; margin-top: 8px;';
+
+      const startBtn = document.createElement('button');
+      startBtn.textContent = '▶ Start anyway';
+      startBtn.style.cssText = 'flex: 1; padding: 8px 0; background: #1565C0; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600;';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.style.cssText = 'flex: 1; padding: 8px 0; background: rgba(255,255,255,0.15); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px;';
+
+      const cleanup = () => {
+        row.remove();
+        if (progressBar) progressBar.parentElement.style.display = '';
+        if (percentEl) percentEl.style.display = '';
+      };
+      startBtn.onclick = (e) => { e.preventDefault(); cleanup(); resolve(true); };
+      cancelBtn.onclick = (e) => { e.preventDefault(); cleanup(); resolve(false); };
+
+      row.appendChild(startBtn);
+      row.appendChild(cancelBtn);
+      state.toastEl.appendChild(row);
+    });
   }
 
   /**
@@ -2749,6 +2862,12 @@
   }
 
   (async function init() {
+    // Best-effort: if this tab holds the persistent sync lock when the page is
+    // unloaded (e.g. a mid-sync reload), release it so the next run isn't blocked.
+    window.addEventListener('pagehide', () => {
+      if (state.holdsLock) { try { releaseSyncLock(); } catch (e) {} }
+    });
+
     // Load config from window, DOM bridge, or IndexedDB
     const configLoaded = await loadConfig();
 

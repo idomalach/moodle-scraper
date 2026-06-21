@@ -41,9 +41,14 @@
         }
       }
 
-      // Folder name
+      // Folder name — show the actual destination structure (folder / semester
+      // subfolder) so a wrong or empty target is obvious. (The browser does not
+      // expose the folder's full OS path, so this is the best disambiguator.)
       const folderName = stored.savedFolderName;
-      $('#folderName').textContent = folderName || 'לא נבחר';
+      const rp = (config && config.rootPath) ? config.rootPath.trim() : '';
+      $('#folderName').textContent = folderName
+        ? (rp ? `${folderName} / ${rp}` : folderName)
+        : 'לא נבחר';
     } catch (e) {}
 
     // Config summary
