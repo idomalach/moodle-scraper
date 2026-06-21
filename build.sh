@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Build the Moodle Scraper distributable and refresh the landing-page download.
+# Build the Moodle Scraper distributable — a SINGLE zip used for BOTH the
+# Chrome Web Store upload and the website's manual-install download.
 #
-# The zip wraps everything in a single top-level "moodle-scraper/" folder so it
-# extracts to ONE clean folder on every OS and tool — including WinRAR / 7-Zip
-# "Extract Here", which otherwise spills the loose files into the current folder.
+# manifest.json sits at the ROOT of the archive: the Chrome Web Store requires
+# this and rejects a wrapper folder ("Manifest file is missing or unreadable").
+# Because the file is named moodle-scraper.zip, the default extractors on
+# Windows ("Extract All") and macOS (Archive Utility) still produce a single
+# clean "moodle-scraper/" folder — exactly what chrome://extensions
+# "Load unpacked" needs. (Only WinRAR/7-Zip "Extract Here" spills loose files;
+# that is a deliberate power-user action on the secondary manual-install path.)
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
@@ -11,15 +16,12 @@ ROOT="$(pwd)"
 VERSION="3.0.3"
 ZIP="moodle-scraper-v${VERSION}.zip"
 
-rm -f moodle-scraper-v*.zip
+# Clean previous builds (incl. the retired separate store zip).
+rm -f moodle-scraper-v*.zip moodle-scraper-store-v*.zip
 
-# Stage the extension under a folder literally named "moodle-scraper", then zip
-# that folder so it becomes the archive's single top-level entry.
-TMP="$(mktemp -d)"
-cp -R bgu-moodle-sync-extension "$TMP/moodle-scraper"
-( cd "$TMP" && zip -rX "$ROOT/$ZIP" moodle-scraper -x "*.DS_Store" -x "*/.DS_Store" >/dev/null )
-rm -rf "$TMP"
+# Zip the CONTENTS of the extension folder so manifest.json lands at the archive root.
+( cd bgu-moodle-sync-extension && zip -rX "$ROOT/$ZIP" . -x "*.DS_Store" -x "*/.DS_Store" >/dev/null )
 
 cp "$ZIP" landing/assets/moodle-scraper.zip
 
-echo "Built $ZIP ($(du -h "$ZIP" | cut -f1)) — top-level folder: moodle-scraper/ ; refreshed landing/assets/moodle-scraper.zip"
+echo "Built $ZIP ($(du -h "$ZIP" | cut -f1)) — manifest.json at root (store-ready); refreshed landing/assets/moodle-scraper.zip"

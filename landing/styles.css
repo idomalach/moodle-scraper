@@ -201,7 +201,41 @@ strong, b { font-weight: 800; color: var(--navy); }
 .section-alt { background: var(--bg-alt); border-block: 1px solid var(--line); }
 .section h2 { font-size: 34px; font-weight: 900; text-align: center; }
 .section-sub { text-align: center; color: var(--muted); font-size: 17px; margin-top: 12px; margin-bottom: 44px; }
-.soon { color: var(--blue-deep); font-weight: 700; white-space: nowrap; }
+/* ── Manual-install fallback (collapsible) ─ */
+.manual { margin-top: 30px; }
+.manual > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 9px;
+  font-weight: 700; font-size: 15.5px;
+  color: var(--blue-deep);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  transition: border-color .18s, color .18s;
+}
+.manual > summary::-webkit-details-marker { display: none; }
+.manual > summary::before { content: "🛠️"; font-size: 1.05em; }
+.manual > summary::after {
+  content: "▾";
+  margin-inline-start: auto;
+  transition: transform .2s ease;
+  font-size: 0.9em;
+}
+.manual[open] > summary::after { transform: rotate(180deg); }
+.manual > summary:hover { border-color: var(--blue); }
+.manual[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.manual-body {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  padding: 20px 18px 8px;
+}
+.manual-intro { color: var(--muted); font-size: 15px; margin-bottom: 16px; }
+.manual-body .dl-box { margin-bottom: 22px; }
 
 /* ── Feature cards ─────────────────────── */
 .cards {
