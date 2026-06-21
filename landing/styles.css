@@ -201,6 +201,19 @@ strong, b { font-weight: 800; color: var(--navy); }
 .section-alt { background: var(--bg-alt); border-block: 1px solid var(--line); }
 .section h2 { font-size: 34px; font-weight: 900; text-align: center; }
 .section-sub { text-align: center; color: var(--muted); font-size: 17px; margin-top: 12px; margin-bottom: 44px; }
+/* ── Browser-support note ──────────────────── */
+.browser-note {
+  text-align: center;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin-top: 24px;
+  padding: 13px 18px;
+  background: #f1f7ff;
+  border: 1px solid #dbe9fb;
+  border-radius: 12px;
+}
+
 /* ── Manual-install fallback (collapsible) ─ */
 .manual { margin-top: 30px; }
 .manual > summary {

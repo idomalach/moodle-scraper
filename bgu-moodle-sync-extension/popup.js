@@ -205,6 +205,10 @@
   // Change folder
   $('#btnChangeFolder').addEventListener('click', async (e) => {
     e.stopPropagation();
+    if (typeof window.showDirectoryPicker !== 'function') {
+      setStatus('error', 'הדפדפן חוסם בחירת תיקייה (נפוץ ב‑Brave). השתמשו ב‑Chrome או Edge.');
+      return;
+    }
     try {
       const dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
       const folderName = dirHandle.name;

@@ -47,7 +47,7 @@ From source:
 ./build.sh
 ```
 
-Produces a single `moodle-scraper-v3.0.3.zip` (gitignored) and copies it to `landing/assets/` for the website download. `manifest.json` sits at the archive **root**, so the same zip is uploadable as-is to the Chrome Web Store *and* extracts to a clean `moodle-scraper/` folder for manual `Load unpacked` (default Windows/macOS extractors fold it by archive name).
+Produces a single `moodle-scraper-v3.0.4.zip` (gitignored) and copies it to `landing/assets/` for the website download. `manifest.json` sits at the archive **root**, so the same zip is uploadable as-is to the Chrome Web Store *and* extracts to a clean `moodle-scraper/` folder for manual `Load unpacked` (default Windows/macOS extractors fold it by archive name).
 
 ## Limitations
 

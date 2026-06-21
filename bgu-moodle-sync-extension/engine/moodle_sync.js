@@ -2565,6 +2565,18 @@
       // Ensure toast exists
       if (!state.toastEl) createToast();
 
+      // Brave (and some privacy browsers) block the File System Access API
+      // entirely — window.showDirectoryPicker is undefined. Fail with a clear
+      // message instead of offering a Pick Folder button that can never open.
+      if (typeof window.showDirectoryPicker !== 'function') {
+        const blockedMsg = 'This browser blocks folder access (common in Brave). Please run the sync in Chrome or Edge.';
+        const tEl = document.getElementById('moodle-sync-toast-text');
+        if (tEl) tEl.textContent = blockedMsg;
+        log('  ✗ ' + blockedMsg);
+        reject(new Error(blockedMsg));
+        return;
+      }
+
       const textEl = document.getElementById('moodle-sync-toast-text');
       if (textEl) textEl.textContent = promptMessage || 'Please pick a folder to continue.';
 

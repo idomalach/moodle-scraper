@@ -698,6 +698,10 @@
   }
 
   $('#btnPickFolder').addEventListener('click', async () => {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      showToast('This browser blocks folder selection (common in Brave). Please use Chrome or Edge.', true);
+      return;
+    }
     try {
       const dirHandle = await showDirectoryPicker({ mode: 'readwrite' });
       const folderName = dirHandle.name;
