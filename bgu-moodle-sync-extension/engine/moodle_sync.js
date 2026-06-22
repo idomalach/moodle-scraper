@@ -1295,6 +1295,65 @@
     }
   }
 
+  /**
+   * Detect a "mislocated" manifest: previous downloads tracked in a DIFFERENT
+   * place than where we're currently pointed — the tell-tale sign that the
+   * destination folder or semester (rootPath) changed since the last sync.
+   * Searches the picked-folder root and its immediate subfolders for a
+   * .moodle_manifest.json that tracks the currently-configured courses.
+   * Runs ONLY on the abort/failure path, so it adds no cost to normal syncs.
+   * Returns { location, matchedCourses } or null.
+   */
+  async function findMislocatedManifest() {
+    try {
+      if (!state.rootHandle) return null;
+      const wantIds = new Set(CONFIG.courses.filter(c => !c.disabled).map(c => String(c.id)));
+      if (wantIds.size === 0) return null;
+
+      const candidates = [{ name: '(folder root)', handle: state.rootHandle }];
+      try {
+        for await (const [name, handle] of state.rootHandle.entries()) {
+          if (handle.kind === 'directory') candidates.push({ name, handle });
+        }
+      } catch {}
+
+      for (const cand of candidates) {
+        // Skip the location we already loaded the (empty) manifest from.
+        try { if (state.semesterHandle && await cand.handle.isSameEntry(state.semesterHandle)) continue; } catch {}
+        let manifest;
+        try {
+          const fh = await cand.handle.getFileHandle('.moodle_manifest.json');
+          manifest = JSON.parse(await (await fh.getFile()).text());
+        } catch { continue; }
+        if (!manifest || typeof manifest !== 'object') continue;
+        let matched = 0;
+        for (const [cid, c] of Object.entries(manifest)) {
+          const n = c && c.items ? Object.keys(c.items).length : 0;
+          if (n > 0 && wantIds.has(String(cid))) matched++;
+        }
+        if (matched >= 1) return { location: cand.name, matchedCourses: matched };
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Recovery guidance appended to "no tracking record" aborts. If a mislocated
+   * manifest is found, it points the user to where their downloads actually
+   * live (so they re-point instead of re-downloading); otherwise it gives the
+   * generic first-run guidance.
+   */
+  async function recoveryHint() {
+    const mis = await findMislocatedManifest();
+    if (mis) {
+      const where = mis.location === '(folder root)'
+        ? 'the folder you picked (with no semester subfolder)'
+        : `the "${mis.location}" subfolder inside your download folder`;
+      return `\n\n📁 Your previous downloads look like they're in ${where} — tracking ${mis.matchedCourses} of your courses. The destination folder or semester likely changed since you seeded.\n→ To keep updating them: set your folder/semester to match that location in Settings, then Sync.\n→ To start fresh in the current location instead: run Seed (הורדה ראשונית).`;
+    }
+    return `\n\nRun Seed (הורדה ראשונית) to build the tracking file, or re-pick the folder where your downloads actually live.`;
+  }
+
   // ============================================================
   // EXCEL STYLING HELPERS
   // ============================================================
@@ -1769,7 +1828,7 @@
         const totalManifestItems = Object.values(state.manifest)
           .reduce((sum, c) => sum + (c.items ? Object.keys(c.items).length : 0), 0);
         if (totalManifestItems === 0) {
-          await safetyAbort('🛑 No tracking file found for this folder — either this is your first run, or the destination folder/semester changed since you seeded. Run Seed (הורדה ראשונית) to build it; if your files were downloaded elsewhere, re-pick that folder instead.');
+          await safetyAbort('🛑 No tracking file found for this folder — either this is your first run, or the destination folder/semester changed since you seeded.' + await recoveryHint());
           return;
         }
       }
@@ -2131,7 +2190,7 @@
         // S4 — Download count safety valve
         const totalScraped = allItems.length;
         if (filtered.length > 10 && totalScraped > 0 && filtered.length > totalScraped * 0.5) {
-          await safetyAbort(`🛑 ${filtered.length}/${totalScraped} files have no tracking record for this folder — the tracking file wasn't found where these were seeded (the destination folder or semester likely changed). Run Seed (הורדה ראשונית) to rebuild it: your existing files will be refreshed and tracking restored. If your downloads live in a different folder, re-pick that one instead.`);
+          await safetyAbort(`🛑 ${filtered.length}/${totalScraped} files have no tracking record for this folder — the tracking file wasn't found where these were seeded.` + await recoveryHint());
           return;
         }
         // Removal detection: flag manifest items no longer on Moodle
