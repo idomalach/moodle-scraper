@@ -1,6 +1,6 @@
 /* ───────────────────────────────────────────
    Moodle Scraper — landing page
-   Hebrew RTL · brand: vivid blue / navy / Hub02 orange
+   Hebrew RTL · brand: vivid blue / navy / orange accent
    ─────────────────────────────────────────── */
 
 :root {
@@ -368,8 +368,6 @@ strong, b { font-weight: 800; color: var(--navy); }
 
 /* ── Footer ────────────────────────────── */
 .footer { padding: 56px 0 44px; text-align: center; background: var(--bg); border-top: 1px solid var(--line); }
-.footer-cover { max-width: 420px; width: 80%; height: auto; margin-bottom: 22px; mix-blend-mode: multiply; }
-.footer-credit { font-size: 16px; color: var(--ink); font-weight: 600; }
 .footer-fine { font-size: 13.5px; color: var(--muted); margin-top: 10px; }
 .footer-fine a { color: var(--muted); text-decoration: underline; }
 

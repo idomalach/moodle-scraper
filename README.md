@@ -3,7 +3,7 @@
 One-click download of all your Moodle course materials into clean, organized folders on your own computer. A Chrome extension that works on 40+ Israeli university Moodle sites.
 
 **Chrome Web Store:** https://chromewebstore.google.com/detail/moodle-scraper-%E2%80%94-israeli/cfmajooboiejfmgadecalaijpppnocbn
-**Website & install guide:** https://moodle-scraper.pages.dev
+**Website & install guide:** https://moodle-scraper-il.pages.dev
 
 ## What it does
 
@@ -21,7 +21,7 @@ Everything runs locally in your browser. No server, no tracking, no data leaves 
 
 ## Install (Chrome)
 
-**Now on the Chrome Web Store** — end users just click **Add to Chrome**: [Moodle Scraper — Israeli](https://chromewebstore.google.com/detail/moodle-scraper-%E2%80%94-israeli/cfmajooboiejfmgadecalaijpppnocbn). Full step-by-step guide at **https://moodle-scraper.pages.dev**.
+**Now on the Chrome Web Store** — end users just click **Add to Chrome**: [Moodle Scraper — Israeli](https://chromewebstore.google.com/detail/moodle-scraper-%E2%80%94-israeli/cfmajooboiejfmgadecalaijpppnocbn). Full step-by-step guide at **https://moodle-scraper-il.pages.dev**.
 
 From source:
 1. `chrome://extensions` → enable **Developer mode** (top-right)
