@@ -185,6 +185,56 @@
     return new Promise(r => setTimeout(r, ms));
   }
 
+  // Chrome can leave a folder handle restored from IndexedDB in a state where
+  // every call on it (queryPermission, entries, getDirectoryHandle) never
+  // settles — seen after the folder's contents changed outside the browser.
+  // Awaiting such a call freezes the sync at Step 1 forever with the lock held,
+  // so every folder-handle call in Step 1 goes through this timeout.
+  const HANDLE_TIMEOUT_MS = 8000;
+
+  function withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error(`${label} did not respond within ${Math.round(ms / 1000)}s`);
+          err.name = 'HandleTimeoutError';
+          reject(err);
+        }, ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Incremental-sync update check: does this HEAD response say the file on
+   * Moodle differs from the one we saved? Returns a short reason, or '' if not.
+   *
+   * - A strong ETag on both sides decides on its own. Moodle's strong ETag is
+   *   the file's content hash, so equal means byte-identical.
+   * - Weak ETags (W/"...") are never compared: they can differ between server
+   *   nodes for identical content.
+   * - Content-Length is compared only on an uncompressed response. BGU gzips
+   *   its files, and a HEAD then reports the COMPRESSED length (24007 for a
+   *   28284-byte .docx), while the manifest stores the real size. Comparing the
+   *   two flagged unchanged files as updated and re-downloaded them each run.
+   */
+  function headIndicatesChange(existing, headers) {
+    const strong = v => (v && !String(v).startsWith('W/') ? String(v) : '');
+    const newEtag = strong(headers.get('etag'));
+    const storedEtag = strong(existing.etag);
+    if (newEtag && storedEtag) {
+      return newEtag !== storedEtag ? 'content fingerprint changed' : '';
+    }
+    const encoding = (headers.get('content-encoding') || '').trim().toLowerCase();
+    if (encoding && encoding !== 'identity') return '';
+    const newSize = parseInt(headers.get('content-length') || '0', 10);
+    if (newSize > 0 && existing.fileSize && newSize !== existing.fileSize) {
+      return `size: ${existing.fileSize}→${newSize}`;
+    }
+    return '';
+  }
+
   /** Normalize a filename per spec rules */
   function normalizeName(name) {
     if (!name) return 'unnamed';
@@ -433,6 +483,37 @@
     if (cm.items[cmid]) return true;
     const prefix = `${cmid}:`;
     return Object.keys(cm.items).some(k => k.startsWith(prefix));
+  }
+
+  /** Was this exact item recorded as skipped/failed in an earlier sync? */
+  function isKnownSkip(item) {
+    const cm = state.manifest[item.courseId];
+    const entry = cm && cm.items && cm.items[manifestKey(item)];
+    return !!entry && entry.status === 'skipped';
+  }
+
+  /**
+   * Everything in a course that is still not downloaded, read from the
+   * manifest: this run's new skips plus those recorded in earlier runs (which
+   * incremental syncs no longer retry or re-report). Each row keeps the date it
+   * was first recorded. Assign-page duplicates are not failures, so they are
+   * left out, as before.
+   */
+  function notDownloadedItems(courseManifest) {
+    const rows = [];
+    for (const [key, e] of Object.entries((courseManifest && courseManifest.items) || {})) {
+      if (!e || e.status !== 'skipped' || e.reason === 'duplicate of main course page') continue;
+      if (e.type === 'subsection') continue; // container recorded by older versions
+      const cmid = String(key).split(':')[0];
+      rows.push({
+        section: e.section || '',
+        name: e.moodleName || '',
+        url: e.url || (e.type ? `${CONFIG.baseUrl}${CONFIG.basePath}mod/${e.type}/view.php?id=${cmid}` : ''),
+        reason: e.reason || '',
+        date: (e.skippedAt || '').split('T')[0],
+      });
+    }
+    return rows;
   }
 
   /** SHA-256 hex of a Blob — used for content-based de-duplication. */
@@ -1227,6 +1308,17 @@
   // MANIFEST MANAGEMENT (patched: S1, S2, S10, S11)
   // ============================================================
 
+  // Where a manifest backup belongs: the picked folder plus the semester
+  // subfolder. Tagging by the picked folder alone let an emptied "Semester
+  // folder name" setting reuse the old backup and sync into the picked
+  // folder's root, re-"updating" files that only exist in the subfolder.
+  // Legacy tags (picked folder only) still match when there is no subfolder.
+  function manifestLocationTag() {
+    if (!state.rootHandle) return '';
+    const sem = state.semesterHandle;
+    return sem && sem !== state.rootHandle ? `${state.rootHandle.name}/${sem.name}` : state.rootHandle.name;
+  }
+
   async function loadManifest(semesterHandle) {
     // S11 — Check filesystem health before attempting read
     const fsHealthy = await isFilesystemHealthy(semesterHandle);
@@ -1253,9 +1345,10 @@
     log('  Filesystem manifest empty or missing — trying IndexedDB backup...');
     const backup = await idbGet('manifest');
     if (backup && Object.keys(backup).length > 0) {
-      // Check if the backup belongs to the current folder
+      // Check if the backup belongs to the current folder (picked folder AND
+      // semester subfolder — see manifestLocationTag)
       const backupFolder = await idbGet('manifestFolderName');
-      const currentFolder = state.rootHandle ? state.rootHandle.name : '';
+      const currentFolder = manifestLocationTag();
       if (!backupFolder) {
         // No folder tag (legacy backup from before this check existed).
         // The filesystem manifest was already empty/missing — this backup
@@ -1265,8 +1358,25 @@
       } else if (currentFolder && backupFolder !== currentFolder) {
         log(`  IndexedDB manifest belongs to "${backupFolder}", not current folder "${currentFolder}" — ignoring stale backup`);
       } else {
-        log('  Manifest restored from IndexedDB backup');
-        return backup;
+        // Even a matching tag is not proof (legacy tags name only the picked
+        // folder): trust the backup only if this location holds at least one
+        // of the course folders it tracks. Otherwise its "updates" would point
+        // at files that are not here and the sync would rebuild courses in the
+        // wrong place.
+        const trackedFolders = Object.values(backup)
+          .filter(c => c && c.items && Object.values(c.items).some(it => it && it.status === 'downloaded'))
+          .map(c => (c.folderName || c.courseName || '').split('/').map(sanitizeSegment).filter(Boolean)[0])
+          .filter(Boolean);
+        let present = 0;
+        for (const name of trackedFolders) {
+          try { await withTimeout(semesterHandle.getDirectoryHandle(name), HANDLE_TIMEOUT_MS, `Checking "${name}"`); present++; } catch { /* not here */ }
+        }
+        if (trackedFolders.length > 0 && present === 0) {
+          log(`  IndexedDB manifest tracks ${trackedFolders.length} course folders, but none of them exist here — ignoring it (wrong folder or semester setting?)`);
+        } else {
+          log('  Manifest restored from IndexedDB backup');
+          return backup;
+        }
       }
     }
 
@@ -1279,7 +1389,7 @@
     await idbSet('manifest', manifest);
     // Tag the backup with the folder name so we can detect stale backups on folder switch
     if (state.rootHandle) {
-      await idbSet('manifestFolderName', state.rootHandle.name);
+      await idbSet('manifestFolderName', manifestLocationTag());
     }
     log('  Manifest saved to IndexedDB backup');
 
@@ -1517,7 +1627,7 @@
             item.name || '',
             item.url || '',
             item.reason || '',
-            new Date().toISOString().split('T')[0],
+            item.date || new Date().toISOString().split('T')[0],
           ]);
         }
       } else {
@@ -1591,7 +1701,7 @@
             'שם': item.name || '',
             'קישור': item.url || '',
             'סיבה': item.reason || '',
-            'תאריך': new Date().toISOString().split('T')[0],
+            'תאריך': item.date || new Date().toISOString().split('T')[0],
           });
         }
       }
@@ -1737,31 +1847,65 @@
       updateToast(state.progressStep, state.progressPercent);
       log('Step 1/8: Requesting folder access...');
       let dirHandle = null;
+      let semHandle = null;
+      let cachedHandleStuck = false;
+
+      // Walk CONFIG.rootPath dynamically (e.g. "סמסטר ב׳" → one nested dir
+      // inside the picked year folder). Every step is time-boxed, so a handle
+      // Chrome stopped answering on surfaces as HandleTimeoutError, not a hang.
+      const openSemesterFolder = async (rootHandle) => {
+        let h = rootHandle;
+        const pathParts = CONFIG.rootPath.split('/').filter(p => p.length > 0);
+        for (const part of pathParts) {
+          // Avoid double-nesting: if the picked folder already IS this segment
+          // (e.g. the user picked ".../סמסטר ב׳" and rootPath is also "סמסטר ב׳"),
+          // don't create a redundant nested copy (…/סמסטר ב׳/סמסטר ב׳).
+          if (h.name === part) {
+            log(`  Skipping redundant path segment "${part}" — picked folder already matches it`);
+            continue;
+          }
+          h = await withTimeout(h.getDirectoryHandle(part, { create: true }), HANDLE_TIMEOUT_MS, `Opening "${part}"`);
+        }
+        return h;
+      };
 
       // S3 — Try cached directory handle from IndexedDB
       const expectedFolderName = CONFIG.savedFolderName || '';
+      let cachedName = '';
       try {
         const cachedHandle = await idbGet('directoryHandle');
         if (cachedHandle) {
+          cachedName = cachedHandle.name;
           // If user picked a different folder in settings, invalidate the cache
           if (expectedFolderName && cachedHandle.name !== expectedFolderName) {
             log(`  Cached folder "${cachedHandle.name}" differs from settings folder "${expectedFolderName}" — re-picking...`);
           } else {
-            const perm = await cachedHandle.queryPermission({ mode: 'readwrite' });
+            const perm = await withTimeout(cachedHandle.queryPermission({ mode: 'readwrite' }), HANDLE_TIMEOUT_MS, 'Saved folder permission check');
             if (perm === 'granted') {
               dirHandle = cachedHandle;
               log('  Using cached directory handle from IndexedDB');
             } else {
-              const requested = await cachedHandle.requestPermission({ mode: 'readwrite' });
+              // No user gesture here, so this normally throws at once. The long
+              // timeout only matters if Chrome does show a prompt.
+              const requested = await withTimeout(cachedHandle.requestPermission({ mode: 'readwrite' }), 60000, 'Saved folder permission request');
               if (requested === 'granted') {
                 dirHandle = cachedHandle;
                 log('  Re-authorized cached directory handle');
               }
             }
+            if (dirHandle) semHandle = await openSemesterFolder(dirHandle);
           }
         }
       } catch (e) {
-        log(`  Cached handle unavailable: ${e.message}`);
+        dirHandle = null;
+        semHandle = null;
+        if (e.name === 'HandleTimeoutError') {
+          cachedHandleStuck = true;
+          log(`  ⚠️ ${e.message}. Chrome's saved link to the folder is stuck — discarding it and asking for the folder again.`);
+          await idbSet('directoryHandle', null);
+        } else {
+          log(`  Cached handle unavailable: ${e.message}`);
+        }
       }
 
       // Fall back to picker if no cached handle (or cache was invalidated)
@@ -1769,10 +1913,24 @@
       // triggered via MutationObserver (not a click), we show a button in the
       // toast and wait for the user to click it — that click IS a gesture.
       if (!dirHandle) {
-        const reason = expectedFolderName
-          ? `Settings folder "${expectedFolderName}" differs from cache — please pick the correct folder.`
-          : 'No saved folder — please pick a folder for your Moodle files.';
+        const folderToPick = expectedFolderName || cachedName;
+        const reason = cachedHandleStuck
+          ? `Chrome lost its link to your Moodle folder (this can happen after files in it change). Please pick ${folderToPick ? `"${folderToPick}"` : 'your Moodle folder'} again.`
+          : (expectedFolderName && cachedName && cachedName !== expectedFolderName)
+            ? `Settings folder "${expectedFolderName}" differs from cache — please pick the correct folder.`
+            : cachedName
+              ? `Chrome needs your permission for "${cachedName}" again — please pick it.`
+              : 'No saved folder — please pick a folder for your Moodle files.';
         dirHandle = await requestDirectoryViaToastButton(reason);
+        try {
+          semHandle = await openSemesterFolder(dirHandle);
+        } catch (e) {
+          if (e.name === 'HandleTimeoutError') {
+            await safetyAbort(`🛑 ${e.message}, even with a freshly picked folder. Quit Chrome completely (Cmd+Q), reopen it, and run the sync again.`, 15000);
+            return;
+          }
+          throw e;
+        }
         // S3 — Cache the handle for future runs
         await idbSet('directoryHandle', dirHandle);
         log('  Directory handle cached in IndexedDB for future runs');
@@ -1787,19 +1945,6 @@
       } catch (e) { /* ignore */ }
 
       state.rootHandle = dirHandle;
-      // Walk CONFIG.rootPath dynamically (e.g. "סמסטר ב׳" → one nested dir inside the picked year folder)
-      let semHandle = state.rootHandle;
-      const pathParts = CONFIG.rootPath.split('/').filter(p => p.length > 0);
-      for (const part of pathParts) {
-        // Avoid double-nesting: if the picked folder already IS this segment
-        // (e.g. the user picked ".../סמסטר ב׳" and rootPath is also "סמסטר ב׳"),
-        // don't create a redundant nested copy (…/סמסטר ב׳/סמסטר ב׳).
-        if (semHandle.name === part) {
-          log(`  Skipping redundant path segment "${part}" — picked folder already matches it`);
-          continue;
-        }
-        semHandle = await semHandle.getDirectoryHandle(part, { create: true });
-      }
       state.semesterHandle = semHandle;
       log(`  Folder access granted (root path: ${CONFIG.rootPath})`);
 
@@ -2057,7 +2202,16 @@
           }
           await delay(CONFIG.delayBetweenFetches);
 
+        } else if (item.type === 'subsection') {
+          // A Moodle 4.5+ subsection is only a container: the files inside it
+          // are scraped as their own items, so there is nothing to download.
+          continue;
+
         } else {
+          // Questionnaires, quizzes, attendance etc. can never be downloaded.
+          // Once an earlier run recorded one, don't process or report it as a
+          // new failure again — the status XLS still lists it from the manifest.
+          if (mode === 'incremental' && isKnownSkip(item)) continue;
           skipQueue.push({ ...item, reason: `unknown type: mod/${item.type}` });
         }
       }
@@ -2156,19 +2310,9 @@
               if (!item.googleExport) fetchOpts.credentials = 'include';
               const headResp = await fetch(fetchUrl, fetchOpts);
               if (headResp.ok) {
-                const newSize = parseInt(headResp.headers.get('content-length') || '0');
-                // Only trust STRONG, reliable validators. Weak etags (W/"...")
-                // can differ between requests/server-nodes for identical content
-                // (BGU serves weak etags + gzip with no Content-Length), which
-                // caused every file to look "updated" and get re-downloaded.
-                // Ignore weak etags; rely on a real size change otherwise.
-                const rawEtag = headResp.headers.get('etag') || '';
-                const newStrongEtag = rawEtag && !rawEtag.startsWith('W/') ? rawEtag : '';
-                const storedStrongEtag = existing.etag && !String(existing.etag).startsWith('W/') ? existing.etag : '';
-                const sizeChanged = newSize > 0 && existing.fileSize && newSize !== existing.fileSize;
-                const etagChanged = newStrongEtag && storedStrongEtag && newStrongEtag !== storedStrongEtag;
-                if (sizeChanged || etagChanged) {
-                  log(`  UPDATE detected: ${item.name} (size: ${existing.fileSize}→${newSize})`);
+                const change = headIndicatesChange(existing, headResp.headers);
+                if (change) {
+                  log(`  UPDATE detected: ${item.name} (${change})`);
                   item._deleteOldFile = existing.savedAs; // mark old file for deletion
                   item._isUpdate = true;
                   filtered.push(item);
@@ -2411,6 +2555,7 @@
             type: sk.type,
             status: 'skipped',
             reason: sk.reason || 'skipped',
+            url: sk.url || '',
             skippedAt: new Date().toISOString(),
           };
         }
@@ -2422,12 +2567,11 @@
         state.progressPercent = 96; state.progressStep = 'Generating reports...';
         updateToast(state.progressStep, state.progressPercent);
         log('Step 8/8: Generating status files and Excel...');
-        // Group skipped items by course for per-course status
+        // Per-course list of everything still not downloaded, from the manifest
+        // (skipQueue holds only this run's NEW skips in incremental mode).
         const skipByCourse = {};
-        for (const item of skipQueue) {
-          const cname = item.courseName || 'unknown';
-          if (!skipByCourse[cname]) skipByCourse[cname] = [];
-          skipByCourse[cname].push(item);
+        for (const course of activeCourses) {
+          if (state.manifest[course.id]) skipByCourse[course.folderName] = notDownloadedItems(state.manifest[course.id]);
         }
         for (const course of activeCourses) {
           log(`  Checking course ${course.folderName} (id=${course.id}): manifest entry exists = ${!!state.manifest[course.id]}`);
