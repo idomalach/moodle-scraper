@@ -40,9 +40,8 @@ extension.
 ## Permissions, explained
 
 - `storage` — save your settings and detected-course cache locally.
-- `activeTab` / `scripting` — inject the sync engine into the Moodle page you're
-  on when you trigger a sync.
-- `notifications` — show a desktop notification when a sync finishes.
+- `activeTab` — talk to the Moodle tab you're on when you start a sync from the
+  popup.
 - host permissions for `*.ac.il` Moodle domains — read your course pages and
   files during a sync.
 

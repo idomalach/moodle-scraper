@@ -1,13 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Moodle Scraper — Israeli Universities",
-  "version": "3.0.5",
+  "version": "3.0.7",
   "description": "Download and organize all your Moodle course materials with one click — for 40+ Israeli universities.",
   "permissions": [
     "storage",
-    "activeTab",
-    "notifications",
-    "scripting"
+    "activeTab"
   ],
   "background": {
     "service_worker": "background.js"
@@ -58,9 +56,6 @@
     "https://moodle.wgalil.ac.il/*",
     "https://moodle.yvc.ac.il/*",
     "https://moodle.zefat.ac.il/*"
-  ],
-  "optional_host_permissions": [
-    "https://*.ac.il/*"
   ],
   "content_scripts": [
     {
