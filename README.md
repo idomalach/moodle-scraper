@@ -1,61 +1,59 @@
-# Moodle Scraper — Israeli Universities
+# Moodle Scraper
 
-One-click download of all your Moodle course materials into clean, organized folders on your own computer. A Chrome extension that works on 40+ Israeli university Moodle sites.
+A Chrome extension that downloads all your Moodle course materials into organized folders on your own computer, in one click. It has presets for 28 Israeli universities and colleges (41 Moodle sites).
 
-**Chrome Web Store:** https://chromewebstore.google.com/detail/moodle-scraper-%E2%80%94-israeli/cfmajooboiejfmgadecalaijpppnocbn
-**Website & install guide:** https://moodle-scraper-il.pages.dev
+**[Chrome Web Store](https://chromewebstore.google.com/detail/cfmajooboiejfmgadecalaijpppnocbn)** · **[Website and install guide](https://moodle-scraper-il.pages.dev)**
+
+## The problem
+
+Students collect course files by hand, one by one, from pages that are organized differently in every course. It takes time, files get missed, and updates are easy to overlook.
 
 ## What it does
 
-- Downloads every file from all your Moodle courses (lectures, exercises, assignments, exams, syllabi)
-- Organizes them into clean folders per course, with sensible names
-- Merges numbered sections (e.g. "הרצאה 1", "הרצאה 2" → a single "הרצאות" folder)
-- Splits assignments into תרגילים / הגשות / פתרונות מרצה, with content-hash de-duplication
-- Groups exam files by year, semester, and מועד
-- Fetches content that isn't directly attached: BGU internal syllabus pages, Google Slides/Docs (→ PDF), Google Sheets (→ Excel), files inside folders, embedded files, and ZIP archives (auto-extracted)
-- Prefers the PDF when both a PDF and an Office version of the same file exist
-- Generates per-course and semester-level Excel status reports, plus a log of anything it couldn't download (with reasons)
-- Incremental sync — after the first run, only new/updated files are downloaded; known failures aren't retried endlessly
+* Downloads lectures, exercises, assignments, exams and syllabi from your courses
+* Organizes them into a folder per course, with clear names
+* Merges numbered sections (for example "הרצאה 1" and "הרצאה 2") into one folder
+* Splits assignments into exercises, your submissions and lecturer solutions, and removes duplicates by content
+* Groups exam files by year, semester and exam round
+* Fetches linked content too: Google Slides, Docs and Sheets, files inside folders, and ZIP archives
+* Creates Excel status reports, including what could not be downloaded and why
+* On later runs, downloads only new and updated files
 
-Everything runs locally in your browser. No server, no tracking, no data leaves your device. See [PRIVACY.md](bgu-moodle-sync-extension/PRIVACY.md).
+Everything runs locally in the browser. There is no server and no tracking. See the [privacy policy](bgu-moodle-sync-extension/PRIVACY.md).
 
-## Install (Chrome)
+## My part
 
-**Now on the Chrome Web Store** — end users just click **Add to Chrome**: [Moodle Scraper — Israeli](https://chromewebstore.google.com/detail/moodle-scraper-%E2%80%94-israeli/cfmajooboiejfmgadecalaijpppnocbn). Full step-by-step guide at **https://moodle-scraper-il.pages.dev**.
+A solo project. I defined the product, built it with AI coding tools (Claude Code), tested it on real courses and published it to the Chrome Web Store, together with its website.
 
-From source:
-1. `chrome://extensions` → enable **Developer mode** (top-right)
-2. **Load unpacked** → select the `bgu-moodle-sync-extension/` folder
-3. Pin the extension, open your university's Moodle and log in
-4. Extension popup → **הגדרות** to pick a download folder and confirm the auto-detected courses
-5. Popup → **הורדה ראשונית** for the first full download; **סנכרון** for updates afterward
+## Tools
+
+JavaScript, Chrome Extension (Manifest V3), File System Access API, IndexedDB, JSZip, SheetJS, Cloudflare Pages, Claude Code
+
+## Install from source
+
+1. Open `chrome://extensions` and turn on **Developer mode**
+2. Click **Load unpacked** and select the `bgu-moodle-sync-extension/` folder
+3. Open your university's Moodle and log in
+4. In the extension popup, open **הגדרות**, pick a download folder and confirm the detected courses
+5. Click **הורדה ראשונית** for the first download, and **סנכרון** for later updates
 
 ## Repository layout
 
 | Path | Purpose |
-|------|---------|
-| `bgu-moodle-sync-extension/` | The Chrome extension (Manifest V3). This is the product. |
-| `bgu-moodle-sync-extension/engine/moodle_sync.js` | The sync engine — the single source of truth for all download/organize logic. |
-| `moodle_sync_spec.md` | Engine specification: architecture, rules, edge cases, safety rules. Read before modifying the engine. |
-| `moodle_israel_research.md` | Research on Israeli Moodle instances — compatibility, auth methods, URL patterns. |
-| `landing/` | Source for the marketing / install website (deployed to Cloudflare Pages). |
-| `build.sh` | Rebuilds the distributable zip and refreshes the landing-page download. |
-
-## Build the distributable
-
-```
-./build.sh
-```
-
-Produces a single `moodle-scraper-v3.0.7.zip` (gitignored) and copies it to `landing/assets/` for the website download. `manifest.json` sits at the archive **root**, so the same zip is uploadable as-is to the Chrome Web Store *and* extracts to a clean `moodle-scraper/` folder for manual `Load unpacked` (default Windows/macOS extractors fold it by archive name).
+|---|---|
+| `bgu-moodle-sync-extension/` | The extension |
+| `bgu-moodle-sync-extension/engine/moodle_sync.js` | The download and organizing engine |
+| `moodle_sync_spec.md` | Engine specification: rules, edge cases and safety rules |
+| `moodle_israel_research.md` | Research on how Israeli Moodle sites differ |
+| `landing/` | The website |
+| `build.sh` | Builds the zip file for the store |
 
 ## Limitations
 
-- **Colab notebooks** and **Google Sites** course pages can't be auto-downloaded (cross-origin) — they're listed in the Excel log.
-- **RAR** files are saved as-is (browsers can't extract RAR); **ZIP** is auto-extracted.
-- **Video links** (YouTube, Zoom) are skipped.
-- The browser's folder picker appears once; the directory handle is cached afterward.
+* Colab notebooks and Google Sites pages cannot be downloaded. They are listed in the Excel log
+* RAR files are saved as they are
+* Video links (YouTube, Zoom) are skipped
 
 ## License
 
-Proprietary — all rights reserved. See [LICENSE](LICENSE).
+Proprietary, all rights reserved. See [LICENSE](LICENSE).
