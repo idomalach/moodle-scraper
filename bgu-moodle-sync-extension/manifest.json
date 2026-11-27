@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Moodle Scraper — Israeli Universities",
-  "version": "3.0.7",
-  "description": "Download and organize all your Moodle course materials with one click — for 40+ Israeli universities.",
+  "version": "3.0.8",
+  "description": "Download and organize all your Moodle course materials with one click, for 28 Israeli universities and colleges.",
   "permissions": [
     "storage",
     "activeTab"

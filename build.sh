@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
 
-VERSION="3.0.7"
+VERSION="3.0.8"
 ZIP="moodle-scraper-v${VERSION}.zip"
 
 # Clean previous builds (incl. the retired separate store zip).
